@@ -1,0 +1,81 @@
+"""Application configuration schema and validation."""
+
+from typing import Literal
+
+from pydantic import Field, PostgresDsn, SecretStr, field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class AppConfig(BaseSettings):
+    """Application configuration loaded from environment variables."""
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore",
+    )
+
+    env: Literal["dev", "staging", "prod"] = Field(
+        ...,
+        description="Application environment",
+    )
+    db_dsn: PostgresDsn = Field(
+        ...,
+        description="PostgreSQL database connection string",
+    )
+    db_pool_min: int = Field(
+        default=2,
+        ge=1,
+        description="Minimum database connection pool size",
+    )
+    db_pool_max: int = Field(
+        default=10,
+        ge=1,
+        description="Maximum database connection pool size",
+    )
+    api_key_odds: SecretStr = Field(
+        default=SecretStr(""),
+        description="API key for odds provider (placeholder)",
+    )
+    api_key_weather: SecretStr = Field(
+        default=SecretStr(""),
+        description="API key for weather provider (placeholder)",
+    )
+    discord_token: SecretStr = Field(
+        default=SecretStr(""),
+        description="Discord bot token (placeholder)",
+    )
+    stripe_secret: SecretStr = Field(
+        default=SecretStr(""),
+        description="Stripe secret key (placeholder)",
+    )
+    default_sim_n: int = Field(
+        default=5000,
+        ge=2000,
+        le=10000,
+        description="Default number of Monte Carlo simulations",
+    )
+    log_level: str = Field(
+        default="INFO",
+        description="Logging level",
+    )
+
+    @field_validator("db_pool_max")
+    @classmethod
+    def validate_pool_max(cls, v: int, info) -> int:
+        """Ensure pool_max >= pool_min."""
+        if "db_pool_min" in info.data and v < info.data["db_pool_min"]:
+            raise ValueError("db_pool_max must be >= db_pool_min")
+        return v
+
+
+_config: AppConfig | None = None
+
+
+def get_config() -> AppConfig:
+    """Get or create the singleton AppConfig instance."""
+    global _config
+    if _config is None:
+        _config = AppConfig()
+    return _config
