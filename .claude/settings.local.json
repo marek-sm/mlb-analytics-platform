@@ -1,9 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Bash(python -m pytest:*)",
-      "Bash(ENV=dev DB_DSN=postgresql://user:pass@localhost:5432/testdb python:*)",
-      "Bash(ls:*)"
-    ]
-  }
-}
