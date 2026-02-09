@@ -6,7 +6,7 @@ MLB analytics platform with Monte Carlo simulation and Discord publishing.
 
 This platform provides analytical capabilities for Major League Baseball data through probabilistic modeling (Monte Carlo simulations) with automated insights delivery. Built with Python 3.11+ using async patterns throughout.
 
-**Current Status:** Unit 1 complete (repository skeleton and configuration). See [DEVLOG.md](docs/DEVLOG.md) for implementation details and [DECISIONS.md](docs/DECISIONS.md) for architectural choices.
+**Current Status:** Unit 2 complete (database schema and migrations). See [DEVLOG.md](docs/DEVLOG.md) for implementation details and [DECISIONS.md](docs/DECISIONS.md) for architectural choices.
 
 ## Installation
 
@@ -45,6 +45,9 @@ Configuration is via environment variables (12-factor). See [.env.example](.env.
 ## Usage
 
 ```bash
+# Run database migrations
+python -m mlb.db.schema.migrate
+
 # Run the application
 python -m mlb.main
 
@@ -89,9 +92,18 @@ mypy src
 mlb-analytics-platform/
 ├── src/mlb/               # Source code (namespace package)
 │   ├── config/           # Configuration and settings
-│   ├── db/               # Database connection pooling
+│   ├── db/               # Database layer
+│   │   ├── models.py    # Table constants and column enums
+│   │   ├── pool.py      # Connection pooling
+│   │   └── schema/      # Migrations and schema management
+│   │       ├── migrate.py           # Migration runner
+│   │       └── migrations/          # SQL migration files
+│   │           ├── 001_initial.sql  # Create all tables
+│   │           └── 002_seed_teams.sql  # Seed reference data
 │   └── main.py           # Application entry point
 ├── tests/                # Test suite
+│   ├── test_config.py   # Configuration tests
+│   └── test_schema.py   # Schema and migration tests
 ├── docs/                 # Documentation
 │   ├── DEVLOG.md        # Development log
 │   └── DECISIONS.md     # Architecture decision records
