@@ -133,3 +133,39 @@ This document tracks key architectural and implementation decisions made through
 **Rationale**: Unit 7 devig logic queries for "best available line at most recent snapshot per book" across multiple sportsbooks. The existing index (game_id, market, snapshot_ts) supports filtering by game and market but requires a sequential scan across books for the latest snapshot per book. For v1 volumes (~30 books × 15 games/day × 10 snapshots = 4,500 rows/day, ~1.6M rows/year), this is acceptable. Adding a covering index on (game_id, market, book, snapshot_ts) now would be premature optimization. The 100ms latency threshold provides a concrete trigger for adding the index if needed. Until then, keeping the schema minimal reduces index maintenance overhead and simplifies the migration history.
 
 ---
+
+## Unit 3: Data Ingestion — Provider-Agnostic Interfaces
+
+### D-017: Odds format detection and conversion
+
+**Decision**: Odds format detection: adapters trust provider metadata field to distinguish American vs. decimal. If no metadata, values in range [−99999, −100] ∪ [100, 99999] are treated as American; values in [1.0, 50.0] are treated as European decimal. Ambiguous values are logged and skipped.
+
+**Known limitation (FC-14)**: European decimal odds ≥ 100.0 would be misclassified as American. Not reachable for v1 main-line MLB markets.
+
+**Rationale**: Prevents silent mis-conversion. §Data Layer: "provider-agnostic interfaces." Explicit format detection keeps conversion logic deterministic and debuggable. Ambiguous values (e.g., 75 could be American +75 or unlikely decimal 75.0) are rare in real odds feeds but must be handled defensively.
+
+---
+
+### D-018: Weather not fetched for retractable-roof parks
+
+**Decision**: Weather is not fetched for retractable-roof parks. They receive no weather row and are treated as neutral run environment.
+
+**Rationale**: Direct from spec §Parks & Weather: "Retractable-roof parks treated as neutral. Roof inference deferred." Fetching weather for retractable parks would waste API quota and introduce ambiguity (roof open vs. closed). V1 treats all retractable parks as neutral regardless of actual roof state. V2 can add roof-state inference if needed.
+
+---
+
+### D-019: Ingestion adapters are stateless async functions
+
+**Decision**: Ingestion adapters are stateless async functions. They do not retry on failure — retry policy is owned by the scheduler (Unit 9).
+
+**Rationale**: Keeps ingestion pure and testable. §Execution & Automation assigns orchestration to the scheduler. Embedding retry logic in adapters would violate single-responsibility principle and complicate testing. Adapters return empty lists or None on failure, log warnings, and delegate retry/backoff decisions to the scheduler.
+
+---
+
+### D-020: Unknown players upserted with available metadata
+
+**Decision**: Unknown players encountered during ingestion are upserted into `players` with available metadata. Missing fields (`position`, `bats`, `throws`) are NULL.
+
+**Rationale**: Prevents FK violations on `lineups` and `player_game_logs` inserts. Metadata is backfilled on subsequent stat fetches. Alternative (rejecting inserts with unknown players) would require pre-populating a complete player roster, which is fragile and unnecessary given MLB roster fluidity (callups, trades). Upsert-on-demand keeps the system resilient to incomplete provider data.
+
+---

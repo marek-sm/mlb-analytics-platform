@@ -6,7 +6,7 @@ MLB analytics platform with Monte Carlo simulation and Discord publishing.
 
 This platform provides analytical capabilities for Major League Baseball data through probabilistic modeling (Monte Carlo simulations) with automated insights delivery. Built with Python 3.11+ using async patterns throughout.
 
-**Current Status:** Unit 2 complete (database schema and migrations). See [DEVLOG.md](docs/DEVLOG.md) for implementation details and [DECISIONS.md](docs/DECISIONS.md) for architectural choices.
+**Current Status:** Unit 3 complete (data ingestion interfaces). See [DEVLOG.md](docs/DEVLOG.md) for implementation details and [DECISIONS.md](docs/DECISIONS.md) for architectural choices.
 
 ## Installation
 
@@ -73,7 +73,12 @@ mypy src
 - Configuration management via Pydantic BaseSettings
 - Async PostgreSQL connection pooling (asyncpg)
 - Database schema and migrations (Unit 2)
-- Raw data ingestion for odds, weather, rosters (Unit 2+)
+- Provider-agnostic data ingestion (Unit 3)
+  - Odds with American → European decimal conversion
+  - Lineups with confirmation flip logic
+  - Player stats with auto-upsert
+  - Game schedules
+  - Weather with park filtering
 - Monte Carlo simulation engine with adaptive simulation counts
 - Discord publishing of analytical insights
 
@@ -103,11 +108,20 @@ mlb-analytics-platform/
 │   │           ├── 002_seed_teams.sql      # Seed reference data
 │   │           ├── 003_fix_cards.sql       # Fix cards table constraints
 │   │           └── 004_players_trigger.sql # Add player audit trigger
+│   ├── ingestion/        # Data ingestion layer
+│   │   ├── base.py      # Abstract providers and canonical schemas
+│   │   ├── cache.py     # TTL-based HTTP response cache
+│   │   ├── odds.py      # Odds provider with format conversion
+│   │   ├── lineups.py   # Lineup provider with confirmation logic
+│   │   ├── stats.py     # Stats provider with upsert logic
+│   │   ├── games.py     # Game schedule provider
+│   │   └── weather.py   # Weather provider with park filtering
 │   └── main.py           # Application entry point
 ├── tests/                # Test suite
 │   ├── conftest.py      # Pytest fixtures and configuration
 │   ├── test_config.py   # Configuration tests
-│   └── test_schema.py   # Schema and migration tests
+│   ├── test_schema.py   # Schema and migration tests
+│   └── test_ingestion.py # Ingestion provider tests
 ├── docs/                 # Documentation
 │   ├── DEVLOG.md        # Development log
 │   └── DECISIONS.md     # Architecture decision records

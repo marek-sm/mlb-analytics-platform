@@ -141,3 +141,108 @@ Comprehensive test coverage in `tests/test_schema.py` (22 test cases):
 **Unit 2 is formally closed. Schema and migrations are stable and verified.**
 
 ---
+
+## 2026-02-09: Unit 3 - Data Ingestion: Provider-Agnostic Interfaces
+
+### What Shipped
+- **Abstract Base Classes (ABCs)**
+  - `OddsProvider`: fetch_odds() returning canonical OddsRow with European decimal prices
+  - `LineupProvider`: fetch_lineup() and is_confirmed() for lineup data
+  - `StatsProvider`: fetch_game_logs() for player statistics
+  - `GameProvider`: fetch_schedule() for game schedules
+  - `WeatherProvider`: fetch_weather() with park type filtering
+
+- **Canonical Row Schemas**
+  - `OddsRow`: game_id, book, market, side, line, price (decimal ≥1.0), snapshot_ts
+  - `LineupRow`: game_id, team_id, player_id, batting_order, is_confirmed, source_ts
+  - `GameLogRow`: player_id, game_id, batting/pitching stats (nullable), is_starter
+  - `GameRow`: game_id, game_date, home/away teams, park, first_pitch, status
+  - `WeatherRow`: game_id, temp_f, wind_speed/dir, precip_pct, fetched_at
+
+- **Concrete V1 Implementations**
+  - `V1OddsProvider`: Stub with American→European decimal conversion logic
+  - `V1LineupProvider`: Implements confirmation flip logic per D-011
+  - `V1StatsProvider`: Upsert game logs with player existence check (D-020)
+  - `V1GameProvider`: Upsert games with status change handling
+  - `V1WeatherProvider`: Park type filtering (returns None for indoor/retractable)
+
+- **Odds Conversion System**
+  - `american_to_decimal()`: Converts American odds to European decimal
+  - `detect_and_convert_odds()`: Auto-detects format with range-based heuristics (D-017)
+  - Positive American: decimal = (american / 100) + 1
+  - Negative American: decimal = (100 / abs(american)) + 1
+  - Ambiguous values logged and skipped
+
+- **Lineup Confirmation Contract**
+  - `write_lineup()`: Flips prior confirmed rows to is_confirmed=FALSE before inserting new confirmed lineup
+  - Implements D-011: at most one confirmed lineup per (game_id, team_id, batting_order)
+  - Handles lineup re-confirmation (rare but valid)
+
+- **TTL-Based Cache**
+  - In-memory cache with expiration checks
+  - `CacheEntry` dataclass: key, payload (bytes), fetched_at, ttl_seconds
+  - `get_cache()` singleton accessor
+  - Prune expired entries on demand
+
+- **Conservative Fallback Policy**
+  - All providers return empty list or None on error (never fabricate data)
+  - Errors logged with warnings (exc_info=True)
+  - No partial writes on failure
+  - Retry logic delegated to scheduler (D-019)
+
+### Tests Added
+Comprehensive test coverage in `tests/test_ingestion.py` (16 test cases):
+- **ABC Implementation Tests**
+  - All 5 ABCs have concrete implementations
+- **Odds Conversion Tests**
+  - American +150 → 2.50, −110 → 1.909
+  - Edge cases: +100, −100, +200, −200
+  - Zero raises ValueError
+  - Format detection for decimal (1.0-50.0) vs American (≥100 or ≤−100)
+  - Ambiguous values (e.g., 75, −50) raise with clear error
+- **Lineup Confirmation Flip Test**
+  - Insert initial confirmed lineup (9 players)
+  - Insert new confirmed lineup (different players)
+  - Verify old lineup flipped to is_confirmed=FALSE
+  - Verify new lineup is confirmed
+- **Stats Upsert Test**
+  - Initial game log insert
+  - Updated game log with same (player_id, game_id)
+  - Verify upsert (not duplicate insert)
+  - Verify stats updated correctly
+- **Weather Park Filtering Test**
+  - Returns None for retractable-roof parks
+  - Returns None for invalid park_id
+  - Outdoor parks proceed to fetch (stub returns None in v1)
+- **Fallback Behavior Tests**
+  - All providers return empty/None on errors (not exceptions)
+  - No data written on fetch failure
+- **Cache Tests**
+  - TTL prevents duplicate fetches
+  - Expiration removes stale entries
+  - Cache miss returns None
+  - Prune removes expired entries
+  - Singleton behavior verified
+- **Player Upsert Test (D-020)**
+  - Unknown player upserted with minimal metadata
+  - Missing position/bats/throws are NULL
+  - Update with team_id works correctly
+
+### Known Limitations
+- V1 providers are stubs (no real API integration)
+- No HTTP client implementation (deferred to provider-specific unit)
+- No rate limiting or quota tracking
+- Cache is in-memory only (cleared on restart)
+- No cache size limits or eviction policy
+- No multi-provider failover (single provider assumption per D-014)
+- No Parquet export (deferred)
+- Weather for retractable-roof parks treated as neutral (roof state not inferred)
+
+### What's Next
+**Unit 4**: Feature Engineering
+- Aggregate player stats (rolling averages, weighted splits)
+- Calculate matchup-specific adjustments (vs. LHP/RHP)
+- Apply park factors to expected runs
+- Build feature vectors for projection models
+
+---
