@@ -12,7 +12,7 @@ This platform provides analytical capabilities for Major League Baseball data th
 
 ```bash
 # Clone and enter the repository
-git clone <repository-url>
+git clone https://github.com/marek-sm/mlb-analytics-platform.git
 cd mlb-analytics-platform
 
 # Create virtual environment
