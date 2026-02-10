@@ -92,21 +92,26 @@ mypy src
 mlb-analytics-platform/
 ├── src/mlb/               # Source code (namespace package)
 │   ├── config/           # Configuration and settings
+│   │   └── settings.py  # Pydantic settings classes
 │   ├── db/               # Database layer
 │   │   ├── models.py    # Table constants and column enums
 │   │   ├── pool.py      # Connection pooling
 │   │   └── schema/      # Migrations and schema management
 │   │       ├── migrate.py           # Migration runner
 │   │       └── migrations/          # SQL migration files
-│   │           ├── 001_initial.sql  # Create all tables
-│   │           └── 002_seed_teams.sql  # Seed reference data
+│   │           ├── 001_initial.sql         # Create all tables
+│   │           ├── 002_seed_teams.sql      # Seed reference data
+│   │           ├── 003_fix_cards.sql       # Fix cards table constraints
+│   │           └── 004_players_trigger.sql # Add player audit trigger
 │   └── main.py           # Application entry point
 ├── tests/                # Test suite
+│   ├── conftest.py      # Pytest fixtures and configuration
 │   ├── test_config.py   # Configuration tests
 │   └── test_schema.py   # Schema and migration tests
 ├── docs/                 # Documentation
 │   ├── DEVLOG.md        # Development log
 │   └── DECISIONS.md     # Architecture decision records
+├── check_db.py          # Database connection verification utility
 └── pyproject.toml       # Project metadata and dependencies
 ```
 
