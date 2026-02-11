@@ -246,3 +246,74 @@ Comprehensive test coverage in `tests/test_ingestion.py` (16 test cases):
 - Build feature vectors for projection models
 
 ---
+
+## 2026-02-10: Unit 4 - Team Run-Scoring Models
+
+### What Shipped
+- **Feature Engineering Module (`models/features.py`)**
+  - `build_game_features()`: Builds game-level feature vectors from ingested data
+  - Fetches game metadata, park factors, weather (with dome park handling)
+  - Extracts starting pitchers from confirmed lineups (D-011)
+  - Calculates pitcher features: rest days, rolling pitch count avg, shrunk ERA
+  - Calculates lineup OPS with empirical Bayes shrinkage (D-021)
+  - Computes bullpen fatigue (7-day IP usage) and team run environment (30-day R/G)
+  - Conservative weather fallback for outdoor parks (72°F, 5mph wind, 0% precip) when data missing (D-023)
+
+- **Model Training & Inference (`models/team_runs.py`)**
+  - `train()`: Trains four LightGBM models (home/away μ, home/away dispersion)
+  - Separate μ and r models with identical feature schemas (D-024)
+  - Trains on historical final games with confirmed lineups
+  - Serializes models to disk with timestamp-based versioning
+  - Logs training metrics (RMSE on training set)
+  - `predict()`: Loads models, builds features, returns `TeamRunParams`
+  - Park factor applied exactly once as multiplicative adjustment to μ (D-010)
+  - μ clamped to [0.5, 15.0], dispersion clamped to ≥0.1 for stability
+
+- **Model Registry (`models/registry.py`)**
+  - `save_model()` / `load_model()`: Pickle-based serialization to `models/artifacts/`
+  - Versioned by timestamp (e.g., `home_mu_20260210_153000.pkl`)
+
+- **Configuration Extensions**
+  - Added `shrinkage_k_batter` (default 200 PA) and `shrinkage_k_pitcher` (default 80 IP) to AppConfig
+  - Added `rolling_window_batting_days` (default 60) and `rolling_window_pitching_days` (default 30)
+  - All configurable via environment variables
+
+- **Contracts**
+  - `GameFeatures`: 23 fields including park factor, weather, starters, lineup strength, bullpen usage
+  - `TeamRunParams`: game_id, home/away μ, home/away dispersion, model_version
+
+### Tests Added
+Comprehensive test coverage in `tests/test_team_runs.py` (7 test cases):
+- **AC1**: `build_game_features()` returns fully populated GameFeatures with all fields non-null (except weather for domes)
+- **AC2**: `train()` completes on ≥30 games and serializes all four models to disk
+- **AC3**: `predict()` returns valid TeamRunParams with μ in [1.0, 12.0] and dispersion > 0
+- **AC4**: Park factor test: Coors Field (1.200) vs neutral park (1.000) produces ~1.2× μ ratio
+- **AC5**: Shrinkage test: 10 IP pitcher ERA estimate closer to league mean than 150 IP pitcher
+- **AC6**: Weather None handling: dome/retractable parks return None for all weather fields, model succeeds
+- **AC7**: Model artifacts load from disk and produce identical output to in-memory models
+
+### Known Limitations
+- V1 uses LightGBM only (no XGBoost or neural nets)
+- Dispersion model trains on absolute residuals as proxy (not true Negative Binomial MLE)
+- No cross-validation or held-out test set (RMSE reported on training data)
+- No feature importance logging or model interpretability tools
+- No automatic model retraining or drift detection (deferred to Unit 9)
+- Lineup OPS calculation assumes batting-order-agnostic contribution (no lineup-slot weighting)
+- Wind direction simplified to 8 categorical bins (no continuous degrees)
+- No handedness splits for park factors (deferred to v2)
+- No caching of feature engineering results (每 game rebuilt from scratch)
+- Model artifacts stored as pickle files (no MLflow or versioning beyond timestamps)
+- No model ensemble or stacking (single model per target)
+- Insufficient history fallback (< 3 starts) uses league averages without player priors
+
+### Dependency Notes
+- **scikit-learn added for training metrics (RMSE). Not used in inference path.**
+
+### What's Next
+**Unit 5**: Player Prop Models
+- Share feature engineering with Unit 4 for game-level covariates
+- Build player-specific features (recent performance, matchup splits)
+- Train models for H, TB, HR, RBI, R, BB, K, OUTS, ER
+- Write `player_projections` table
+
+---

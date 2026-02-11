@@ -837,5 +837,92 @@ async def test_unknown_player_upsert_lineups():
             await conn.execute("DELETE FROM games WHERE game_id = 'test_game_fc12_lineup'")
 
 
+# FC-15: Test game score persistence for final games
+@pytest.mark.asyncio
+async def test_game_final_score_persisted():
+    """
+    Test that home_score and away_score are persisted for final games (FC-15, D-025).
+
+    Verifies:
+    - Games with status='final' have home_score and away_score populated
+    - Games with status='scheduled' have NULL scores
+    """
+    pool = await get_pool()
+    game_provider = V1GameProvider()
+
+    try:
+        # Setup: Get real team and park IDs from seed data
+        async with pool.acquire() as conn:
+            teams = await conn.fetch("SELECT team_id FROM teams LIMIT 2")
+            park = await conn.fetchval("SELECT park_id FROM parks LIMIT 1")
+
+            home_team_id = teams[0]["team_id"]
+            away_team_id = teams[1]["team_id"]
+
+        # Create a final game with scores
+        final_game = GameRow(
+            game_id="test_game_fc15_final",
+            game_date=date(2026, 1, 15),
+            home_team_id=home_team_id,
+            away_team_id=away_team_id,
+            park_id=park,
+            first_pitch=datetime(2026, 1, 15, 19, 0, 0, tzinfo=timezone.utc),
+            status="final",
+            home_score=5,
+            away_score=3,
+        )
+
+        # Create a scheduled game without scores
+        scheduled_game = GameRow(
+            game_id="test_game_fc15_scheduled",
+            game_date=date(2026, 1, 16),
+            home_team_id=home_team_id,
+            away_team_id=away_team_id,
+            park_id=park,
+            first_pitch=datetime(2026, 1, 16, 19, 0, 0, tzinfo=timezone.utc),
+            status="scheduled",
+            home_score=None,
+            away_score=None,
+        )
+
+        # Write both games
+        await game_provider.write_games([final_game, scheduled_game])
+
+        # Verify final game has scores populated
+        async with pool.acquire() as conn:
+            final_row = await conn.fetchrow(
+                """
+                SELECT status, home_score, away_score
+                FROM games
+                WHERE game_id = 'test_game_fc15_final'
+                """
+            )
+            assert final_row is not None
+            assert final_row["status"] == "final"
+            assert final_row["home_score"] == 5
+            assert final_row["away_score"] == 3
+
+        # Verify scheduled game has NULL scores
+        async with pool.acquire() as conn:
+            scheduled_row = await conn.fetchrow(
+                """
+                SELECT status, home_score, away_score
+                FROM games
+                WHERE game_id = 'test_game_fc15_scheduled'
+                """
+            )
+            assert scheduled_row is not None
+            assert scheduled_row["status"] == "scheduled"
+            assert scheduled_row["home_score"] is None
+            assert scheduled_row["away_score"] is None
+
+    finally:
+        # Cleanup
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "DELETE FROM games WHERE game_id IN ('test_game_fc15_final', 'test_game_fc15_scheduled')"
+            )
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

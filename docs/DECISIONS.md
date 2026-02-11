@@ -169,3 +169,53 @@ This document tracks key architectural and implementation decisions made through
 **Rationale**: Prevents FK violations on `lineups` and `player_game_logs` inserts. Metadata is backfilled on subsequent stat fetches. Alternative (rejecting inserts with unknown players) would require pre-populating a complete player roster, which is fragile and unnecessary given MLB roster fluidity (callups, trades). Upsert-on-demand keeps the system resilient to incomplete provider data.
 
 ---
+
+## Unit 4: Team Run-Scoring Models
+
+### D-021: Shrinkage constant defaults for empirical Bayes estimation
+
+**Decision**: Shrinkage constant `k` defaults: batters k=200 PA, pitchers k=80 IP (outs/3). Configurable in `AppConfig`.
+
+**Rationale**: Balances signal vs. noise for v1 sample sizes. Standard empirical Bayesian approach. §Modeling Strategy: "shrinkage / pooling via rolling baselines and priors."
+
+---
+
+### D-022: Rolling window durations for player statistics
+
+**Decision**: Rolling windows: batting stats use 60-day window, pitching stats use 30-day window. Both trailing from game_date.
+
+**Rationale**: Pitching performance is more volatile and recent-biased. Windows are configurable.
+
+---
+
+### D-023: Weather-missing fallback for outdoor parks
+
+**Decision**: Weather-missing fallback: use 72°F, 5 mph wind, 0% precip as neutral defaults when weather data is unavailable for an outdoor park.
+
+**Rationale**: Prevents model failure while remaining close to a league-average outdoor environment. §Data Layer: "conservative fallbacks."
+
+---
+
+### D-024: Dispersion model trained separately from mean model
+
+**Decision**: Dispersion model (r) is trained separately, not jointly with μ. Input features are identical to the μ model.
+
+**Rationale**: Avoids training complexity in v1. Joint estimation deferred to v2. §Modeling Strategy: "both mean and dispersion explicitly predicted."
+
+---
+
+### D-025: games.home_score and games.away_score population contract
+
+**Decision**: games.home_score and games.away_score (added in migration 005) are populated by the games ingestion adapter when status = 'final'. They are NULL for non-final games. Primary consumer is Unit 8 (evaluation). Unit 4 reads them as training targets for the μ model.
+
+**Rationale**: Migration 005 added these columns but no DECISION documented who writes them or when. Without a clear contract, downstream units may read incomplete data or fail to populate them correctly. The score columns are required for Unit 8 (evaluation) to compute log loss/Brier against predictions, and Unit 4 needs them as training targets. The contract is simple: scores are populated only when the game is final, NULL otherwise. This prevents partial or inconsistent data from entering the pipeline.
+
+---
+
+### D-026: Model features passed as named columns, never positional arrays
+
+**Decision**: Model features are passed as named columns (DataFrame or dict), never as positional arrays. Feature names are derived from GameFeatures.feature_names() and must match between training and inference. This prevents silent feature misalignment when the feature set evolves.
+
+**Rationale**: The original implementation converted GameFeatures to raw numpy arrays in _features_to_array(), discarding column names and creating implicit positional coupling. If Unit 5 extends GameFeatures or fields are reordered, the model would silently map features to wrong columns, producing garbage predictions with no error. Using DataFrames with explicit feature names eliminates this coupling and allows sklearn/LightGBM to validate feature names at prediction time. The test_feature_name_stability test enforces that GameFeatures.feature_names() matches the trained model's booster_.feature_name(), catching misalignment at test time rather than in production.
+
+---

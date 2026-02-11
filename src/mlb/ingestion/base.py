@@ -63,6 +63,8 @@ class GameRow:
     park_id: int
     first_pitch: datetime | None = None  # UTC
     status: str = "scheduled"  # 'scheduled' | 'confirmed' | 'final' | 'postponed'
+    home_score: int | None = None  # Populated when status='final'
+    away_score: int | None = None  # Populated when status='final'
 
 
 @dataclass

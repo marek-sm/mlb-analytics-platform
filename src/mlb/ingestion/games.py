@@ -68,8 +68,8 @@ class V1GameProvider(GameProvider):
             # Upsert statement
             upsert_sql = f"""
                 INSERT INTO {Table.GAMES}
-                (game_id, game_date, home_team_id, away_team_id, park_id, first_pitch, status, updated_at)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, now())
+                (game_id, game_date, home_team_id, away_team_id, park_id, first_pitch, status, home_score, away_score, updated_at)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now())
                 ON CONFLICT (game_id)
                 DO UPDATE SET
                     game_date = EXCLUDED.game_date,
@@ -78,6 +78,8 @@ class V1GameProvider(GameProvider):
                     park_id = EXCLUDED.park_id,
                     first_pitch = EXCLUDED.first_pitch,
                     status = EXCLUDED.status,
+                    home_score = EXCLUDED.home_score,
+                    away_score = EXCLUDED.away_score,
                     updated_at = now()
             """
 
@@ -92,6 +94,8 @@ class V1GameProvider(GameProvider):
                         row.park_id,
                         row.first_pitch,
                         row.status,
+                        row.home_score,
+                        row.away_score,
                     )
                     for row in rows
                 ],

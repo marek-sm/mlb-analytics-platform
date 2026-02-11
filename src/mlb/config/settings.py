@@ -56,6 +56,30 @@ class AppConfig(BaseSettings):
         le=10000,
         description="Default number of Monte Carlo simulations",
     )
+    shrinkage_k_batter: int = Field(
+        default=200,
+        ge=50,
+        le=500,
+        description="Shrinkage constant for batters (PA)",
+    )
+    shrinkage_k_pitcher: int = Field(
+        default=80,
+        ge=20,
+        le=200,
+        description="Shrinkage constant for pitchers (IP)",
+    )
+    rolling_window_batting_days: int = Field(
+        default=60,
+        ge=14,
+        le=120,
+        description="Rolling window for batting stats (days)",
+    )
+    rolling_window_pitching_days: int = Field(
+        default=30,
+        ge=7,
+        le=60,
+        description="Rolling window for pitching stats (days)",
+    )
     log_level: str = Field(
         default="INFO",
         description="Logging level",

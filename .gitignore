@@ -18,5 +18,8 @@ venv/
 # Logs
 *.log
 
+# Model artifacts
+src/mlb/models/artifacts/*.pkl
+
 # Claude
 .claude/
