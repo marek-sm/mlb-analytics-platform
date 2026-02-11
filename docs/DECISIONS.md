@@ -219,3 +219,45 @@ This document tracks key architectural and implementation decisions made through
 **Rationale**: The original implementation converted GameFeatures to raw numpy arrays in _features_to_array(), discarding column names and creating implicit positional coupling. If Unit 5 extends GameFeatures or fields are reordered, the model would silently map features to wrong columns, producing garbage predictions with no error. Using DataFrames with explicit feature names eliminates this coupling and allows sklearn/LightGBM to validate feature names at prediction time. The test_feature_name_stability test enforces that GameFeatures.feature_names() matches the trained model's booster_.feature_name(), catching misalignment at test time rather than in production.
 
 ---
+
+## Unit 5: Player Prop Models
+
+### D-027: P(start) is a LightGBM binary classifier with threshold configured separately
+
+**Decision**: P(start) is a LightGBM binary classifier. Features: platoon matchup, days_rest, starts_last_7, starts_last_14, batting_order history. Threshold for publishing gate is configured separately in Unit 9 (0.85–0.90).
+
+**Rationale**: Spec §Player Props: "Probabilistic start model: P(start | handedness, platoon usage, rest, lineup history)." Model produces the probability; the threshold is a publishing decision.
+
+---
+
+### D-028: PA distribution modeled as discrete multiclass, not Poisson
+
+**Decision**: PA distribution is modeled as a discrete probability vector (PA = 0 through 6+) via a LightGBM multiclass classifier, not a Poisson or continuous model.
+
+**Rationale**: Captures the strong discreteness and ceiling effects of MLB PA counts (rarely >6). Simpler than a count model for v1.
+
+---
+
+### D-029: Event rates use shrunk rolling means, not separate ML models
+
+**Decision**: Event rates (H/PA, HR/PA, K/BF, etc.) are modeled as shrunk rolling means, not separate ML models. Shrinkage uses the same framework as Unit 4 (D-021).
+
+**Rationale**: Spec says "per-opportunity event rates" with "shrinkage / pooling via rolling baselines and priors." For v1, shrunk means are sufficient and avoid overfitting on small samples. Upgrading to ML-based rate models is a v2 option.
+
+---
+
+### D-030: Switch hitters always receive platoon_adv = True
+
+**Decision**: Switch hitters always receive `platoon_adv = True`.
+
+**Rationale**: They bat from the advantaged side by rule. Avoids a feature-engineering special case that adds complexity with no v1 benefit.
+
+---
+
+### D-031: Pitcher k_rate is K per batter faced (K/BF) using approximation
+
+**Decision**: Pitcher k_rate is K per batter faced (K/BF). Since batters_faced is not stored in player_game_logs, BF is approximated as ip_outs × 1.35 (league-average BF-per-out ratio). This ratio is a configurable constant in AppConfig (bf_per_out_ratio). Adding a batters_faced column to player_game_logs is a v2 improvement.
+
+**Rationale**: The spec defines k_rate as "P(K | batter faced)" and Unit 6's simulation needs to sample strikeouts from batters faced, not from outs. Using K/out instead of K/BF produces biased projections because pitchers who walk many batters record fewer outs per BF, inflating K/out relative to K/BF. The approximation BF ≈ ip_outs × 1.35 is derived from league-average baserunner rates and provides a statistically sound proxy without requiring schema changes.
+
+---

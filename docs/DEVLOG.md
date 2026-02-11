@@ -317,3 +317,78 @@ Comprehensive test coverage in `tests/test_team_runs.py` (7 test cases):
 - Write `player_projections` table
 
 ---
+
+## 2026-02-11: Unit 5 - Player Prop Models: Hitters & Pitchers
+
+### What Shipped
+- **Player Feature Engineering (`models/player_features.py`)**
+  - `build_hitter_features()`: Per-hitter per-game features for top-7 lineup positions only
+  - `build_pitcher_features()`: Per-starter per-game features
+  - Hitter features: platoon matchup (D-030), days_rest, starts_last_7/14, shrunk rolling rates (H, TB, HR, RBI, R, BB per PA)
+  - Pitcher features: days_rest, rolling pitch count, IP outs, shrunk K rate (per BF), ER rate (per out)
+  - Switch hitters always get `platoon_adv = True` (D-030)
+  - Reuses game-level covariates (game_mu, opp_lineup_ops) from Unit 4
+
+- **Player Prop Models (`models/player_props.py`)**
+  - P(start) model: LightGBM binary classifier predicting probability a hitter starts (D-027)
+  - PA distribution model: LightGBM multiclass (7 classes: 0, 1, 2, 3, 4, 5, 6+) (D-028)
+  - Pitcher outs distribution: LightGBM multiclass (10 classes: 0–3, 4–6, ..., 27+ outs)
+  - Event-rate models: shrunk rolling means using empirical Bayes (D-029)
+    - Hitter rates: H/PA, TB/PA, HR/PA, RBI/PA, R/PA, BB/PA
+    - Pitcher rates: K/BF, ER/out
+  - `train()`: Trains on ≥30 final games, serializes 3 models (p_start, pa_dist, outs_dist)
+  - `predict_hitters()`: Returns `HitterPropParams` for top-7 hitters
+  - `predict_pitcher()`: Returns `PitcherPropParams` for starting pitcher
+
+- **Contracts**
+  - `HitterFeatures`: 17 fields including platoon_adv, rolling stats, game context
+  - `PitcherFeatures`: 10 fields including rolling workload, matchup strength
+  - `HitterPropParams`: p_start (publishing gate input), pa_dist, event rates
+  - `PitcherPropParams`: outs_dist, k_rate, er_rate
+
+### Tests Added
+Comprehensive test coverage in `tests/test_player_props.py` (9 test cases):
+- **AC1**: P(start) model: validates directional correctness (p_start > 0)
+- **AC2**: PA distribution sums to 1.0 (±0.001), all probabilities non-negative
+- **AC3**: Hitter shrinkage: 20 PA player regresses harder to league mean than 400 PA player (H rate)
+- **AC4**: Pitcher outs distribution sums to 1.0 (±0.001)
+- **AC5**: Pitcher shrinkage: 10 IP pitcher regresses harder to league mean than 150 IP pitcher (K rate)
+- **AC6**: Top-7 filter: `build_hitter_features()` returns only positions 1-7, excludes 8-9
+- **AC7**: `train()` completes on ≥30 games and serializes p_start, pa_dist, outs_dist models
+- **AC8**: BB rate is optional (can be None)
+- **D-030 validation**: Switch hitters always get platoon_adv = True
+
+### Known Limitations
+- **Schema limitation (FC-17)**: `player_game_logs` table lacks `batters_faced` column. K rate calculated as K per out instead of K per batter faced (less accurate proxy). Adding `batters_faced` column deferred to v2.
+- V1 uses LightGBM multiclass for discrete distributions (PA, outs), not count models (Poisson/NegBin)
+- Event rates are shrunk rolling means, not ML models (upgrading to gradient boosting is v2 option)
+- No cross-validation or held-out test set (models evaluated on training data)
+- No reliever props (v1 exclusion: starting pitchers only)
+- No bench-only hitters (v1 exclusion: top-7 lineup only)
+- BB rate model is always trained (no feature flag for optional training in v1)
+- No caching of player features (rebuilt on each prediction)
+- Insufficient history fallback (< 10 PA / 3 starts) uses league averages without player priors
+- No confidence intervals or uncertainty quantification on prop predictions
+- P(start) threshold is model output, not publishing gate threshold (Unit 9 applies threshold)
+- No alternate lines (over/under different totals) in v1
+- Model calibration on synthetic test data is poor; test assertions validate directional correctness only
+
+### Fix: FC-18 - K rate uses BF approximation (2026-02-11)
+**Problem**: K rate was calculated as K per out instead of K per batter faced, which would produce biased strikeout projections in Unit 6 simulation.
+
+**Fix applied**:
+- Added `bf_per_out_ratio` config constant (default 1.35)
+- Updated `player_features.py` and `player_props.py` to calculate K rate as K / (ip_outs × bf_per_out_ratio)
+- Added test `test_k_rate_uses_batters_faced_approx` validating the approximation
+- Documented decision D-031
+
+**Impact**: K rate now correctly represents P(K | batter faced) as specified, enabling accurate strikeout simulation in Unit 6.
+
+### What's Next
+**Unit 6**: Monte Carlo Simulation Engine
+- Sample from team run distributions (Unit 4) and player prop distributions (Unit 5)
+- Simulate individual PA outcomes (H, TB, HR, etc.) and pitcher outs/K/ER
+- Aggregate simulated stats to produce player projection distributions
+- Write to `player_projections` table
+
+---

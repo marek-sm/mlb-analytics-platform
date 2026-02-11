@@ -80,6 +80,12 @@ class AppConfig(BaseSettings):
         le=60,
         description="Rolling window for pitching stats (days)",
     )
+    bf_per_out_ratio: float = Field(
+        default=1.35,
+        ge=1.0,
+        le=2.0,
+        description="League-average batters faced per out (for K/BF approximation)",
+    )
     log_level: str = Field(
         default="INFO",
         description="Logging level",
