@@ -6,7 +6,7 @@ MLB analytics platform with Monte Carlo simulation and Discord publishing.
 
 This platform provides analytical capabilities for Major League Baseball data through probabilistic modeling (Monte Carlo simulations) with automated insights delivery. Built with Python 3.11+ using async patterns throughout.
 
-**Current Status:** Unit 3 complete (data ingestion interfaces). See [DEVLOG.md](docs/DEVLOG.md) for implementation details and [DECISIONS.md](docs/DECISIONS.md) for architectural choices.
+**Current Status:** Unit 4 complete (team run-scoring models). See [DEVLOG.md](docs/DEVLOG.md) for implementation details and [DECISIONS.md](docs/DECISIONS.md) for architectural choices.
 
 ## Installation
 
@@ -40,6 +40,10 @@ Configuration is via environment variables (12-factor). See [.env.example](.env.
 
 - `DB_POOL_MIN`, `DB_POOL_MAX`: Connection pool sizing
 - `DEFAULT_SIM_N`: Monte Carlo simulation count (2000-10000, default: 5000)
+- `SHRINKAGE_K_BATTER`: Empirical Bayes shrinkage for batters in PA (50-500, default: 200)
+- `SHRINKAGE_K_PITCHER`: Empirical Bayes shrinkage for pitchers in IP (20-200, default: 80)
+- `ROLLING_WINDOW_BATTING_DAYS`: Rolling window for batting stats in days (14-120, default: 60)
+- `ROLLING_WINDOW_PITCHING_DAYS`: Rolling window for pitching stats in days (7-60, default: 30)
 - `LOG_LEVEL`: Logging verbosity
 
 ## Usage
@@ -79,6 +83,12 @@ mypy src
   - Player stats with auto-upsert
   - Game schedules
   - Weather with park filtering
+- Team run-scoring models (Unit 4)
+  - Game-level feature engineering with park factors
+  - LightGBM models for μ (mean) and dispersion
+  - Empirical Bayes shrinkage for player stats
+  - Bullpen fatigue and rolling performance metrics
+  - Conservative weather fallbacks for dome parks
 - Monte Carlo simulation engine with adaptive simulation counts
 - Discord publishing of analytical insights
 
@@ -116,12 +126,17 @@ mlb-analytics-platform/
 │   │   ├── stats.py     # Stats provider with upsert logic
 │   │   ├── games.py     # Game schedule provider
 │   │   └── weather.py   # Weather provider with park filtering
+│   ├── models/           # Projection models
+│   │   ├── features.py  # Game-level feature engineering
+│   │   ├── team_runs.py # Team run-scoring models (μ + dispersion)
+│   │   └── registry.py  # Model serialization and versioning
 │   └── main.py           # Application entry point
 ├── tests/                # Test suite
 │   ├── conftest.py      # Pytest fixtures and configuration
 │   ├── test_config.py   # Configuration tests
 │   ├── test_schema.py   # Schema and migration tests
-│   └── test_ingestion.py # Ingestion provider tests
+│   ├── test_ingestion.py # Ingestion provider tests
+│   └── test_team_runs.py # Team run-scoring model tests
 ├── docs/                 # Documentation
 │   ├── DEVLOG.md        # Development log
 │   └── DECISIONS.md     # Architecture decision records
