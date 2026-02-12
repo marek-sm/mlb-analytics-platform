@@ -86,6 +86,18 @@ class AppConfig(BaseSettings):
         le=2.0,
         description="League-average batters faced per out (for K/BF approximation)",
     )
+    min_edge_threshold: float = Field(
+        default=0.02,
+        ge=0.0,
+        le=0.10,
+        description="Minimum edge threshold (2%) for kelly_fraction > 0 (D-037)",
+    )
+    kelly_fraction_multiplier: float = Field(
+        default=0.25,
+        ge=0.05,
+        le=1.0,
+        description="Fractional Kelly multiplier (0.25 = quarter-Kelly) (D-038)",
+    )
     log_level: str = Field(
         default="INFO",
         description="Logging level",

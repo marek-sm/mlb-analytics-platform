@@ -6,7 +6,7 @@ MLB analytics platform with Monte Carlo simulation and Discord publishing.
 
 This platform provides analytical capabilities for Major League Baseball data through probabilistic modeling (Monte Carlo simulations) with automated insights delivery. Built with Python 3.11+ using async patterns throughout.
 
-**Current Status:** Unit 6 complete (Monte Carlo simulation engine). See [DEVLOG.md](docs/DEVLOG.md) for implementation details and [DECISIONS.md](docs/DECISIONS.md) for architectural choices.
+**Current Status:** Unit 7 complete (odds processing, edge calculation & bankroll sizing). See [DEVLOG.md](docs/DEVLOG.md) for implementation details and [DECISIONS.md](docs/DECISIONS.md) for architectural choices.
 
 ## Installation
 
@@ -45,6 +45,8 @@ Configuration is via environment variables (12-factor). See [.env.example](.env.
 - `ROLLING_WINDOW_BATTING_DAYS`: Rolling window for batting stats in days (14-120, default: 60)
 - `ROLLING_WINDOW_PITCHING_DAYS`: Rolling window for pitching stats in days (7-60, default: 30)
 - `BF_PER_OUT_RATIO`: League-average batters faced per out for K/BF approximation (1.0-2.0, default: 1.35)
+- `MIN_EDGE_THRESHOLD`: Minimum edge for kelly_fraction > 0 (0.0-0.10, default: 0.02)
+- `KELLY_FRACTION_MULTIPLIER`: Fractional Kelly multiplier (0.05-1.0, default: 0.25)
 - `LOG_LEVEL`: Logging verbosity
 
 ## Usage
@@ -105,6 +107,13 @@ mypy src
   - Team market derivation (ML, RL ±1.5, Total, Team Totals)
   - Player prop probability derivation with hardcoded main lines
   - Persistence to projections, sim_market_probs, player_projections tables
+- Odds processing, edge calculation & bankroll sizing (Unit 7)
+  - Best-line selection across multiple sportsbooks
+  - Proportional (multiplicative) devig for fair probability calculation
+  - Edge calculation (p_model − p_fair) for all team markets
+  - Fractional Kelly sizing with configurable threshold and multiplier
+  - Idempotent persistence with edge_computed_at timestamp tracking
+  - Handles missing odds, stale odds, and player prop no-match cases
 - Discord publishing of analytical insights
 
 **Non-Goals for V1:**
@@ -152,6 +161,11 @@ mlb-analytics-platform/
 │   │   ├── engine.py    # Simulation kernel (NB sampling, tie-break, player props)
 │   │   ├── markets.py   # Market probability derivation
 │   │   └── persistence.py # Database persistence layer
+│   ├── odds/             # Odds processing and edge calculation
+│   │   ├── best_line.py # Best-line selection across books
+│   │   ├── devig.py     # Proportional devig for fair probabilities
+│   │   ├── edge.py      # Edge calculation and Kelly sizing
+│   │   └── persistence.py # Edge value persistence
 │   └── main.py           # Application entry point
 ├── tests/                # Test suite
 │   ├── conftest.py         # Pytest fixtures and configuration
@@ -160,7 +174,8 @@ mlb-analytics-platform/
 │   ├── test_ingestion.py   # Ingestion provider tests
 │   ├── test_team_runs.py   # Team run-scoring model tests
 │   ├── test_player_props.py # Player prop model tests
-│   └── test_simulation.py  # Monte Carlo simulation tests
+│   ├── test_simulation.py  # Monte Carlo simulation tests
+│   └── test_edge.py        # Odds processing and edge calculation tests
 ├── docs/                 # Documentation
 │   ├── DEVLOG.md        # Development log
 │   └── DECISIONS.md     # Architecture decision records

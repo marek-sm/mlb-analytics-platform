@@ -295,3 +295,37 @@ This document tracks key architectural and implementation decisions made through
 **Rationale**: Spec: "event models conditional on PA." Full joint distribution of hitter outcomes is a v2 improvement.
 
 ---
+
+## Unit 7: Odds Processing, Edge Calculation & Bankroll Sizing
+
+### D-036: Proportional (multiplicative) devig only
+
+**Decision**: Proportional (multiplicative) devig only. No power devig, Shin, or additive methods in v1.
+
+**Rationale**: Spec: "proportional devig for fair probabilities." Single method keeps the system simple and auditable.
+
+---
+
+### D-037: Minimum edge threshold defaults to 0.02 (2%)
+
+**Decision**: Minimum edge threshold defaults to 0.02 (2%). Configurable in AppConfig. Edges below threshold still stored but kelly_fraction is set to 0.0.
+
+**Rationale**: Prevents noise-level edges from generating sizing recommendations. §Odds, Edge & Bankroll: "minimum thresholds."
+
+---
+
+### D-038: Kelly fraction = 0.25 (quarter-Kelly)
+
+**Decision**: Kelly fraction = 0.25 (quarter-Kelly). Configurable in AppConfig. Formula: `0.25 × edge / (best_decimal_price − 1)`.
+
+**Rationale**: Spec: "Fractional Kelly (0.25×)." Quarter-Kelly is standard for reducing variance in sports betting bankroll management.
+
+---
+
+### D-039: Devig requires both sides of a two-way market from the same book
+
+**Decision**: Devig requires both sides of a two-way market from the same book. If no book provides both sides, that market receives no fair probability and no edge for that game.
+
+**Rationale**: Proportional devig is mathematically undefined without the complementary side. Mixing books for devig introduces inconsistent vig assumptions.
+
+---

@@ -473,3 +473,79 @@ Comprehensive test coverage in `tests/test_simulation.py` (20+ test cases):
 - Update sim_market_probs and player_projections with edge, kelly_fraction, edge_computed_at
 
 ---
+
+## 2026-02-12: Unit 7 - Odds Processing, Edge Calculation & Bankroll Sizing
+
+### What Shipped
+- **Best-Line Selection (`odds/best_line.py`)**
+  - `get_best_lines()`: Fetches highest-price (most favorable) odds per (market, side, line) across all books
+  - Uses most recent snapshot_ts per book
+  - Returns `BestLine` dataclass with game_id, market, side, line, best_price, book, snapshot_ts
+  - Returns empty list for games with no odds (no error raised)
+
+- **Proportional Devig (`odds/devig.py`)**
+  - `proportional_devig()`: Converts European decimal prices to fair probabilities (D-036)
+  - Formula: `fair_i = (1/price_i) / sum(1/price_j)`
+  - Validates all prices ≥ 1.0 (European decimal format)
+  - Works for two-way and multi-way markets (e.g., regulation winner + tie)
+
+- **Edge Calculation & Kelly Sizing (`odds/edge.py`)**
+  - `compute_edges()`: Main entry point for edge computation
+  - Fetches best lines from odds_snapshots
+  - Applies proportional devig to get fair probabilities (D-039: requires both sides from same book)
+  - Calculates edge = p_model − p_fair for all team markets
+  - Computes fractional Kelly: `0.25 × edge / (best_price − 1)` (D-038)
+  - Sets kelly_fraction = 0.0 if edge < min_edge_threshold (default 0.02, D-037)
+  - Logs warnings for stale odds (>2 hours older than projection)
+  - Player props: edge/kelly remain NULL if no matching odds available (acceptable per AC#8)
+  - Returns `EdgeResult` with market_edges and player_edges lists
+
+- **Persistence (`odds/persistence.py`)**
+  - `persist_edges()`: Updates sim_market_probs and player_projections with edge values
+  - Batch UPDATEs using executemany for efficiency
+  - Sets edge_computed_at on ALL sim_market_probs rows for the projection (D-012)
+  - Marks edge pass as complete even when no odds found
+  - Idempotent: re-running overwrites edge values without creating duplicate rows (AC#9)
+
+- **Configuration Extensions**
+  - Added `min_edge_threshold` (default 0.02, range [0.0, 0.10]) to AppConfig (D-037)
+  - Added `kelly_fraction_multiplier` (default 0.25, range [0.05, 1.0]) to AppConfig (D-038)
+  - Both configurable via environment variables
+
+- **Contracts**
+  - `BestLine`: game_id, market, side, line, best_price, book, snapshot_ts, fair_prob
+  - `MarketEdge`: prob_id, market, side, p_model, p_fair, edge, best_price, kelly_fraction
+  - `PlayerEdge`: pp_id, player_id, stat, p_model, p_fair, edge, best_price, kelly_fraction (all nullable)
+  - `EdgeResult`: projection_id, market_edges, player_edges, computed_at
+
+### Tests Added
+Comprehensive test coverage in `tests/test_edge.py` (16 test cases):
+- **AC1 - Proportional devig**: [1.91, 1.91] → [0.5, 0.5]; [1.50, 2.80] → probabilities sum to 1.0 with favorite > 0.5
+- **AC2 - Best-line selection**: Returns highest price across 3 books; empty list for no odds
+- **AC3 - Edge calculation**: p_model=0.55, p_fair=0.50 → edge=0.05; negative edge validated
+- **AC4 - Kelly sizing**: edge=0.05, price=2.00 → kelly=0.0125 (0.25 × 0.05 / 1.0)
+- **AC5 - Minimum threshold**: edge < 0.02 → kelly=0.0 (but edge value still stored)
+- **AC6 - edge_computed_at**: All sim_market_probs rows have edge_computed_at IS NOT NULL after compute
+- **AC7 - No odds available**: Completes without error, edge/kelly remain NULL, edge_computed_at still set
+- **AC8 - Player prop no-match**: Team odds exist but no player prop odds → edge/kelly remain NULL (no error)
+- **AC9 - Idempotent**: Running twice overwrites edge values, no duplicate rows, edge_computed_at updated
+
+### Known Limitations
+- V1 uses proportional devig only (no power devig, Shin, or additive methods, D-036)
+- Devig requires both sides from same book (D-039); if unavailable, fair_prob = None
+- Player prop edge calculation is incomplete in v1: all player props get NULL edges (odds format mismatch)
+- Line matching uses floating-point equality (acceptable for v1, may need tolerance in v2)
+- Stale odds (>2 hours) log warning but still used (v1 allows stale odds)
+- No alternate lines: simulation uses hardcoded main lines (D-034); mismatched lines are skipped
+- No calibration model application yet (hook exists, models trained in Unit 8)
+- No CLV (closing line value) computation (Unit 8)
+- Kelly sizing uses single fractional multiplier (no dynamic Kelly based on edge confidence)
+
+### What's Next
+**Unit 8**: Model Evaluation & Calibration
+- Compute log loss, Brier score, ECE, tail accuracy on completed projections
+- Train market-specific calibration models (e.g., underdog bias correction)
+- Calculate CLV (closing line value) for edge validation
+- Write to eval_results table
+
+---
