@@ -6,7 +6,7 @@ MLB analytics platform with Monte Carlo simulation and Discord publishing.
 
 This platform provides analytical capabilities for Major League Baseball data through probabilistic modeling (Monte Carlo simulations) with automated insights delivery. Built with Python 3.11+ using async patterns throughout.
 
-**Current Status:** Unit 5 complete (player prop models). See [DEVLOG.md](docs/DEVLOG.md) for implementation details and [DECISIONS.md](docs/DECISIONS.md) for architectural choices.
+**Current Status:** Unit 6 complete (Monte Carlo simulation engine). See [DEVLOG.md](docs/DEVLOG.md) for implementation details and [DECISIONS.md](docs/DECISIONS.md) for architectural choices.
 
 ## Installation
 
@@ -97,7 +97,14 @@ mypy src
   - Event-rate models with shrinkage (H, TB, HR, RBI, R, BB, K, ER)
   - Top-7 lineup filter and platoon matchup analysis
   - K/BF approximation using configurable batters-faced-per-out ratio
-- Monte Carlo simulation engine with adaptive simulation counts
+- Monte Carlo simulation engine (Unit 6)
+  - Negative Binomial score sampling with adaptive trial counts (2k-10k)
+  - Correlated noise via bivariate normal copula (configurable ρ)
+  - Extra-innings tie-break with bullpen fatigue differential
+  - Player prop sampling (hitters: PA/H/TB/HR/RBI/R/BB; pitchers: outs/K/ER)
+  - Team market derivation (ML, RL ±1.5, Total, Team Totals)
+  - Player prop probability derivation with hardcoded main lines
+  - Persistence to projections, sim_market_probs, player_projections tables
 - Discord publishing of analytical insights
 
 **Non-Goals for V1:**
@@ -141,6 +148,10 @@ mlb-analytics-platform/
 │   │   ├── player_props.py     # Player prop models (P(start), PA, outs, event rates)
 │   │   ├── registry.py         # Model serialization and versioning
 │   │   └── artifacts/          # Serialized model files
+│   ├── simulation/       # Monte Carlo simulation engine
+│   │   ├── engine.py    # Simulation kernel (NB sampling, tie-break, player props)
+│   │   ├── markets.py   # Market probability derivation
+│   │   └── persistence.py # Database persistence layer
 │   └── main.py           # Application entry point
 ├── tests/                # Test suite
 │   ├── conftest.py         # Pytest fixtures and configuration
@@ -148,7 +159,8 @@ mlb-analytics-platform/
 │   ├── test_schema.py      # Schema and migration tests
 │   ├── test_ingestion.py   # Ingestion provider tests
 │   ├── test_team_runs.py   # Team run-scoring model tests
-│   └── test_player_props.py # Player prop model tests
+│   ├── test_player_props.py # Player prop model tests
+│   └── test_simulation.py  # Monte Carlo simulation tests
 ├── docs/                 # Documentation
 │   ├── DEVLOG.md        # Development log
 │   └── DECISIONS.md     # Architecture decision records

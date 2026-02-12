@@ -392,3 +392,84 @@ Comprehensive test coverage in `tests/test_player_props.py` (9 test cases):
 - Write to `player_projections` table
 
 ---
+
+## 2026-02-11: Unit 6 - Monte Carlo Simulation Engine
+
+### What Shipped
+- **Simulation Kernel (`simulation/engine.py`)**
+  - `simulate_game()`: Main entry point for Monte Carlo simulation (2k–10k trials, adaptive)
+  - Negative Binomial sampling for team run distributions using μ and r from Unit 4
+  - Correlated noise via bivariate normal copula (D-032): shared standard normal Z per trial, default ρ=0.15
+  - Extra-innings tie-break: probabilistic resolution based on relative team strength (D-033)
+  - Player prop sampling:
+    - Hitters: PA from pa_dist, then Bernoulli/Binomial for H/HR/BB, Poisson for RBI/R (D-035)
+    - Pitchers: outs from outs_dist, K from k_rate × BF, ER from er_rate × outs
+  - Park factor NOT re-applied (uses pre-adjusted μ from TeamRunParams, D-010)
+  - Handles hitter p_start < 1.0 (zeros out stats in non-start trials)
+  - BB model optional (skips if bb_rate is None)
+
+- **Market Derivation (`simulation/markets.py`)**
+  - `derive_team_markets()`: Derives all four team markets from simulated score matrix
+    - Moneyline (home/away win probability)
+    - Run Line ±1.5 (home/away cover probability)
+    - Game Total 8.5 (over/under probability)
+    - Team Totals 4.5 (home/away over/under probability)
+  - `derive_player_props()`: Derives player prop probabilities from sampled stats
+    - Hitter props: H, TB, HR, RBI, R, BB (over main line)
+    - Pitcher props: K, OUTS, ER (over main line)
+    - Uses hardcoded main lines (D-034): H=0.5, TB=1.5, HR=0.5, etc.
+
+- **Persistence (`simulation/persistence.py`)**
+  - `persist_simulation_results()`: Writes SimResult → projections + sim_market_probs + player_projections
+  - Returns projection_id for foreign key linkage
+  - Leaves edge, kelly_fraction, edge_computed_at as NULL (populated by Unit 7)
+  - Batch inserts for team markets and player props
+
+- **Contracts**
+  - `SimResult`: game_id, run_ts, home/away μ/disp, sim_n, home/away scores, model_version, hitter_sims, pitcher_sims
+  - `HitterSimResult`: player_id, p_start, PA/H/TB/HR/RBI/R/BB arrays (shape: sim_n)
+  - `PitcherSimResult`: player_id, outs/K/ER arrays (shape: sim_n)
+  - `MarketProb`: market, side, line, prob
+  - `PlayerPropProb`: player_id, p_start, stat, line, prob_over
+
+### Tests Added
+Comprehensive test coverage in `tests/test_simulation.py` (20+ test cases):
+- **AC1**: NB score distribution: sample mean within ±0.2, variance within ±20% of theoretical
+- **AC2**: Moneyline: equal teams produce P(home_win) = 0.50 ± 0.03
+- **AC3**: Run line: P(home covers -1.5) < P(home_win) (spreading harder than winning)
+- **AC4**: Game total: μ=4.5 teams produce P(over 8.5) ≈ 0.50 ± 0.05
+- **AC5**: Team totals: P(home over 4.5) consistent with home_mu
+- **AC6**: Tie-break: all ties resolved, P(home_win | tie) correlates with relative strength
+- **AC7**: Correlated noise: ρ=0.3 produces sample correlation in [0.15, 0.45]; ρ=0.0 near zero
+- **AC8**: Hitter prop sampling: h_rate=0.25, mean PA=4 → mean(h) ≈ 1.0 ± 0.15
+- **AC9**: Pitcher prop sampling: k_rate=0.22, 18 outs → mean(k) ≈ 5.35 ± 0.5
+- **AC10**: Persistence round-trip: projection_id FK linkage, edge IS NULL
+- **AC11**: Adaptive N: sim_n clamped to [2000, 10000]
+- **AC12**: Park factor not re-applied: Coors μ=5.4 sample mean matches 5.4, not 5.4×1.2
+- **Edge cases**: hitter not starting (p_start < 1.0), BB model absent, very low μ, minimum sim_n
+
+### Known Limitations
+- V1 uses simplified tie-break (no full inning-by-inning extra innings)
+- Hitter stat sampling assumes independence (no joint distribution of H/TB/HR/RBI/R)
+- TB derived from H + extra bases (not independently sampled, approximate)
+- No alternate lines (only main lines hardcoded, D-034)
+- No live/in-game simulation (v1 exclusion)
+- Bullpen fatigue differential in tie-break is not yet implemented (±0.02 adjustment placeholder)
+- No derivative markets (run spread other than ±1.5, alternate totals)
+- No confidence intervals or uncertainty quantification on market probabilities
+- Correlation parameter (ρ) is configurable but not inferred from data
+- Pitcher lineup OPS placeholder (0.700 league average, not actual lineup OPS calculated)
+
+### Dependency Notes
+- **scipy added for stats.nbinom (Negative Binomial sampling and copula transformations)**
+- **numpy used for array operations and random sampling**
+
+### What's Next
+**Unit 7**: Edge Calculation & Kelly Sizing
+- Fetch latest odds from odds_snapshots
+- Devig multi-book odds to fair probabilities
+- Calculate edge = P_model − P_fair
+- Compute Kelly fractions for positive-edge opportunities
+- Update sim_market_probs and player_projections with edge, kelly_fraction, edge_computed_at
+
+---

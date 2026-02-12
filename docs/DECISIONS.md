@@ -261,3 +261,37 @@ This document tracks key architectural and implementation decisions made through
 **Rationale**: The spec defines k_rate as "P(K | batter faced)" and Unit 6's simulation needs to sample strikeouts from batters faced, not from outs. Using K/out instead of K/BF produces biased projections because pitchers who walk many batters record fewer outs per BF, inflating K/out relative to K/BF. The approximation BF ≈ ip_outs × 1.35 is derived from league-average baserunner rates and provides a statistically sound proxy without requiring schema changes.
 
 ---
+
+## Unit 6: Monte Carlo Simulation Engine
+
+### D-032: Correlated noise uses bivariate normal copula
+
+**Decision**: Correlated noise uses a bivariate normal copula. A shared standard normal Z is drawn per trial; each team's NB quantile is shifted by ρ × Z. Default ρ = 0.15, configurable in AppConfig.
+
+**Rationale**: Spec: "optional correlated noise introduced during simulation without requiring latent variable inference." Copula approach is lightweight and avoids joint distribution modeling.
+
+---
+
+### D-033: Extra-innings tie-break is simplified probabilistic resolution
+
+**Decision**: Extra-innings tie-break: P(home_win | tie) = home_mu / (home_mu + away_mu), adjusted by ±0.02 for bullpen fatigue differential. No additional runs are scored; the tie-break only assigns a winner.
+
+**Rationale**: Spec: "simplified probabilistic tie-break based on team strength and bullpen state." This is the minimal faithful implementation. Full run-scoring extras deferred to v2.
+
+---
+
+### D-034: Player prop main lines are hardcoded for v1
+
+**Decision**: Player prop main lines are hardcoded for v1: H=0.5, TB=1.5, HR=0.5, RBI=0.5, R=0.5, BB=0.5, K=4.5, OUTS=16.5, ER=2.5. These are the most common sportsbook lines.
+
+**Rationale**: Spec: "main line only." Dynamic line detection from odds is deferred to Unit 7 or v2. Hardcoded lines are sufficient for v1 probability derivation.
+
+---
+
+### D-035: Hitter stat sampling uses independent Bernoulli per PA
+
+**Decision**: Hitter stat sampling within a trial: PA is drawn first from pa_dist. Then H, HR, BB are drawn as independent Bernoulli/Binomial per PA. TB is derived from H + extra bases (not independently sampled). RBI and R use Poisson with rate × PA. Independence assumption is a v1 simplification.
+
+**Rationale**: Spec: "event models conditional on PA." Full joint distribution of hitter outcomes is a v2 improvement.
+
+---
