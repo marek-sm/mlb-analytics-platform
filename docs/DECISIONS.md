@@ -329,3 +329,29 @@ This document tracks key architectural and implementation decisions made through
 **Rationale**: Proportional devig is mathematically undefined without the complementary side. Mixing books for devig introduces inconsistent vig assumptions.
 
 ---
+
+## Unit 8: Evaluation & Backtesting Harness
+
+### D-040: CLV closing line = latest odds snapshot at T−5 minutes before first_pitch
+
+**Decision**: CLV closing line = latest odds snapshot at T−5 minutes before first_pitch. Devigged using the same proportional method (D-036). If no snapshot exists within 30 minutes before first pitch, the game is excluded from CLV.
+
+**Rationale**: Spec: "CLV (median close at T−5)." The 30-minute fallback window prevents excluding too many games while keeping the "close" meaningful.
+
+---
+
+### D-041: Calibration uses isotonic regression as default
+
+**Decision**: Calibration uses isotonic regression as default. Platt scaling available as config option. Calibration is per-market (ml, rl, total, team_total). Player prop calibration deferred to v2.
+
+**Rationale**: Spec: "market-specific calibration models." Isotonic is nonparametric and handles non-monotonic miscalibration better than Platt for small samples.
+
+---
+
+### D-042: Eval results are upserted on (eval_date, market, metric)
+
+**Decision**: Eval results are upserted on (eval_date, market, metric). Re-running a backtest for the same date and market overwrites prior results.
+
+**Rationale**: Prevents accumulation of stale eval rows when models are updated and re-evaluated.
+
+---

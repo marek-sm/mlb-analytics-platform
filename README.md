@@ -6,7 +6,7 @@ MLB analytics platform with Monte Carlo simulation and Discord publishing.
 
 This platform provides analytical capabilities for Major League Baseball data through probabilistic modeling (Monte Carlo simulations) with automated insights delivery. Built with Python 3.11+ using async patterns throughout.
 
-**Current Status:** Unit 7 complete (odds processing, edge calculation & bankroll sizing). See [DEVLOG.md](docs/DEVLOG.md) for implementation details and [DECISIONS.md](docs/DECISIONS.md) for architectural choices.
+**Current Status:** Unit 8 complete (evaluation & backtesting harness). See [DEVLOG.md](docs/DEVLOG.md) for implementation details and [DECISIONS.md](docs/DECISIONS.md) for architectural choices.
 
 ## Installation
 
@@ -114,6 +114,13 @@ mypy src
   - Fractional Kelly sizing with configurable threshold and multiplier
   - Idempotent persistence with edge_computed_at timestamp tracking
   - Handles missing odds, stale odds, and player prop no-match cases
+- Evaluation & backtesting harness (Unit 8)
+  - Pure metric functions: log loss, Brier score, ECE, tail accuracy
+  - Closing Line Value (CLV) computation with T-5 closing odds
+  - Rolling-origin backtesting for model performance evaluation
+  - Market-specific calibration models (isotonic regression, Platt scaling)
+  - Per-metric upsert to eval_results table (FC-20 safe partial writes)
+  - Comprehensive test coverage (19 tests) for all evaluation contracts
 - Discord publishing of analytical insights
 
 **Non-Goals for V1:**
@@ -141,7 +148,9 @@ mlb-analytics-platform/
 │   │           ├── 001_initial.sql         # Create all tables
 │   │           ├── 002_seed_teams.sql      # Seed reference data
 │   │           ├── 003_fix_cards.sql       # Fix cards table constraints
-│   │           └── 004_players_trigger.sql # Add player audit trigger
+│   │           ├── 004_players_trigger.sql # Add player audit trigger
+│   │           ├── 005_game_scores.sql     # Add home_score/away_score columns
+│   │           └── 006_eval_upsert.sql     # Add unique index for eval upserts
 │   ├── ingestion/        # Data ingestion layer
 │   │   ├── base.py      # Abstract providers and canonical schemas
 │   │   ├── cache.py     # TTL-based HTTP response cache
@@ -166,6 +175,12 @@ mlb-analytics-platform/
 │   │   ├── devig.py     # Proportional devig for fair probabilities
 │   │   ├── edge.py      # Edge calculation and Kelly sizing
 │   │   └── persistence.py # Edge value persistence
+│   ├── evaluation/       # Model evaluation and backtesting
+│   │   ├── metrics.py    # Pure metric functions (log loss, Brier, ECE, tail accuracy)
+│   │   ├── clv.py        # Closing Line Value computation
+│   │   ├── backtest.py   # Rolling-origin backtest orchestration
+│   │   ├── calibration.py # Market-specific calibration models
+│   │   └── persistence.py # Eval results persistence
 │   └── main.py           # Application entry point
 ├── tests/                # Test suite
 │   ├── conftest.py         # Pytest fixtures and configuration
@@ -175,7 +190,8 @@ mlb-analytics-platform/
 │   ├── test_team_runs.py   # Team run-scoring model tests
 │   ├── test_player_props.py # Player prop model tests
 │   ├── test_simulation.py  # Monte Carlo simulation tests
-│   └── test_edge.py        # Odds processing and edge calculation tests
+│   ├── test_edge.py        # Odds processing and edge calculation tests
+│   └── test_evaluation.py  # Evaluation and backtesting tests
 ├── docs/                 # Documentation
 │   ├── DEVLOG.md        # Development log
 │   └── DECISIONS.md     # Architecture decision records

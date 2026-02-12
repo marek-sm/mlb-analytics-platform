@@ -549,3 +549,85 @@ Comprehensive test coverage in `tests/test_edge.py` (16 test cases):
 - Write to eval_results table
 
 ---
+
+## 2026-02-12: Unit 8 - Evaluation & Backtesting Harness
+
+### What Shipped
+- **Pure Metric Functions (`evaluation/metrics.py`)**
+  - `log_loss()`: Cross-entropy loss with epsilon clipping (1e-15) to prevent log(0)
+  - `brier_score()`: Mean squared error between probabilities and binary outcomes
+  - `ece()`: Expected Calibration Error with configurable bins (default 10)
+  - `tail_accuracy()`: Calibration diagnostics for extreme probabilities (p < 0.15, p > 0.85)
+  - All functions validate inputs and operate on numpy arrays (no DB dependencies)
+
+- **CLV Computation (`evaluation/clv.py`)**
+  - `compute_clv()`: Calculates Closing Line Value for projections vs. market close
+  - Uses T-5 minute closing odds (D-040): latest snapshot between T-30 and T-5 before first pitch
+  - Devigged using proportional method (same as Unit 7, D-036)
+  - Excludes games without closing odds in 30-minute window
+  - Returns `CLVRow` with p_model, p_close_fair, clv (positive = beat the close)
+
+- **Rolling-Origin Backtest (`evaluation/backtest.py`)**
+  - `run_backtest()`: Evaluates model performance over date range for specific market
+  - Only uses final games with non-null scores (no future leakage)
+  - Uses most recent projection per game (by run_ts)
+  - Computes all metrics: log loss, Brier, ECE, tail accuracy (low/high), median CLV
+  - Returns `EvalReport` with sample_n=0 and metrics=None if no final games found
+  - Market-specific outcome computation: ML, RL, total, team_total
+
+- **Calibration Models (`evaluation/calibration.py`)**
+  - `fit_calibration()`: Trains market-specific calibration using historical (p_model, outcome) pairs
+  - Isotonic regression (default, D-041): nonparametric, handles non-monotonic miscalibration
+  - Platt scaling (optional): parametric logistic regression, smoother for small samples
+  - Requires minimum 50 samples to fit (configurable)
+  - Saves models to registry: `calibration_{market}_{method}.pkl`
+  - `apply_calibration()`: Applies fitted calibration to raw probabilities, clipped to [0, 1]
+  - `load_calibration()`: Loads calibration model from registry
+
+- **Persistence (`evaluation/persistence.py`)**
+  - `persist_eval_report()`: Writes EvalReport → eval_results table
+  - Upserts on (eval_date, market, metric) for idempotency (D-042)
+  - Writes 6 rows per report: log_loss, brier, ece, tail_acc_low, tail_acc_high, clv
+  - Skips metrics that are None (e.g., insufficient tail samples)
+  - Meta field stores JSON metadata (tail sample counts, model version)
+
+- **Contracts**
+  - `CLVRow`: prob_id, game_id, market, p_model, p_close_fair, clv
+  - `EvalReport`: eval_date, market, start_date, end_date, sample_n, all metrics, meta
+  - `CalibrationModel`: market, method (isotonic/platt), fitted_at, params (pickled or dict)
+
+### Tests Added
+Comprehensive test coverage in `tests/test_evaluation.py` (25+ test cases):
+- **AC1 - Log loss**: Calibrated model < biased model
+- **AC2 - Brier score**: Exact numeric test (0.04 for [0.8, 0.2] vs [1, 0])
+- **AC3 - ECE**: Perfect calibration ≈ 0; miscalibrated (all 0.9, 50% outcomes) ≈ 0.4
+- **AC4 - Tail accuracy**: 10 predictions p<0.15 with 1 event → low_tail_acc=0.10; <5 samples → None
+- **AC5 - CLV computation**: p_model=0.55, p_close=0.52 → clv=0.03; median CLV correct
+- **AC6 - CLV uses T-5**: Uses T-5 odds (1.85), not T-1 odds (1.50); validates correct snapshot
+- **AC7 - Rolling-origin backtest**: Only final games, correct sample_n, Brier matches expected
+- **AC8 - Calibration fit/apply**: Returns CalibrationModel; apply returns float in [0,1]; ECE decreases
+- **AC9 - Persistence**: Writes 6 rows to eval_results with correct metric names
+- **AC10 - Idempotent**: Running twice does not duplicate rows, count remains correct
+- **Validation tests**: All metrics raise on invalid inputs (length mismatch, empty arrays, out-of-range)
+
+### Known Limitations
+- Player prop calibration deferred to v2 (team markets only, D-041)
+- Calibration models saved as pickle files (no versioning metadata beyond timestamp)
+- Team total outcome computation assumes "over" semantics (ambiguous from schema)
+- No automated eval scheduling (Unit 9 responsibility)
+- No confidence intervals on metrics (bootstrap deferred to v2)
+- ECE bin edges are fixed uniform spacing (adaptive binning deferred)
+- CLV computation excludes games without odds in 30-minute window (no fallback)
+- Calibration requires minimum 50 samples (may fail for rare markets in small date ranges)
+- No model ensemble or stacking for calibration (single method per market)
+- Brier decomposition (reliability, resolution, uncertainty) not implemented
+- No skill score (Brier skill score vs baseline) computed
+
+### What's Next
+**Unit 9**: Execution & Automation
+- Build scheduler for daily model training, projection runs, and eval passes
+- Implement publishing gate (p_start threshold, edge_computed_at check, confirmed lineup)
+- Create cron-compatible CLI entry points
+- Add Discord notification hooks (v1 basic: "projection complete")
+
+---
