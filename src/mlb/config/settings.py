@@ -136,6 +136,34 @@ class AppConfig(BaseSettings):
         default="INFO",
         description="Logging level",
     )
+    discord_guild_id: str = Field(
+        default="",
+        description="Discord guild (server) ID for bot operations",
+    )
+    free_pick_channel: str = Field(
+        default="free-picks",
+        description="Channel name for daily free picks",
+    )
+    paid_channels: list[str] = Field(
+        default=["team-moneyline", "team-runline", "team-totals", "player-props-h", "player-props-p"],
+        description="Channel names for paid-tier picks",
+    )
+    announcements_channel: str = Field(
+        default="announcements",
+        description="Channel name for bot announcements",
+    )
+    free_pick_window_min: int = Field(
+        default=60,
+        ge=30,
+        le=120,
+        description="Earliest time before first_pitch to post free pick (minutes)",
+    )
+    free_pick_window_max: int = Field(
+        default=90,
+        ge=30,
+        le=120,
+        description="Latest time before first_pitch to post free pick (minutes)",
+    )
 
     @field_validator("db_pool_max")
     @classmethod

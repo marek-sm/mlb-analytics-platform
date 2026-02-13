@@ -723,3 +723,102 @@ Comprehensive test coverage in `tests/test_scheduler.py` (13 test cases):
 - Handle user commands (/subscribe, /unsubscribe)
 
 ---
+
+## 2026-02-13: Unit 10 - Discord Bot & Publishing Layer
+
+### What Shipped
+- **Bot Lifecycle Management (`discord_bot/bot.py`)**
+  - `MLBPicksBot`: Discord bot class extending commands.Bot
+  - Minimal intents (guilds + members for permission sync)
+  - Graceful startup: connects to Discord, verifies guild, ensures channels, initializes publisher
+  - Graceful shutdown: SIGTERM/SIGINT handling, clean disconnect
+  - `wait_ready()`: Async wait for bot readiness with timeout
+  - `run_until_shutdown()`: Main event loop with shutdown signal handling
+  - Publish-only in v1: no user commands or interactive features (D-047)
+
+- **Channel Management (`discord_bot/channels.py`)**
+  - `ensure_channels()`: Creates missing channels on startup with correct permissions
+  - 7 required channels: #free-picks (public), #team-moneyline, #team-runline, #team-totals, #player-props-h, #player-props-p (all paid), #announcements (public)
+  - Paid channels: deny @everyone, allow bot role
+  - `sync_member_permissions()`: Queries subscriptions table, grants/revokes channel access based on tier
+  - Tier gating: `tier='paid' AND status='active'` required for paid channel access
+
+- **Pick Publishing (`discord_bot/publisher.py`)**
+  - `Publisher` class: Manages message publishing with anti-spam tracking
+  - `publish_picks(game_id)`: Publishes all publishable picks for a game
+    - Queries sim_market_probs and player_projections for latest projection with edge_computed_at IS NOT NULL
+    - Filters by `is_publishable()` gate (team markets always, player props require lineup or high p_start)
+    - Only publishes positive-edge plays (edge > 0 AND kelly_fraction > 0) (D-050)
+    - Anti-spam: one message per (game_id, market, side, line), edits existing messages on rerun (D-049)
+    - In-memory message cache: (game_id, market, side, line) → message_id
+    - Routes to correct channel: team-moneyline, team-runline, team-totals, player-props-h, player-props-p
+  - `publish_free_pick()`: Posts daily free pick to #free-picks
+    - Selects highest-edge team market play in 60-90 minute window before first_pitch (D-048)
+    - Requires lineup confirmation (uses is_publishable gate)
+    - Posts at most once per day (in-memory flag: _free_pick_posted_date)
+
+- **Message Formatting (`discord_bot/formatter.py`)**
+  - `format_team_market_embed()`: Pure function returning Discord Embed for team markets
+    - Title: "NYY @ BOS — Moneyline"
+    - Fields: Game Time, Pick, Model Probability, Edge, Kelly Sizing, Best Book
+    - Footer: "Model v1 | 5,000 simulations"
+  - `format_player_prop_embed()`: Pure function returning Discord Embed for player props
+    - Title: "Aaron Judge — Hits O/U 0.5"
+    - Fields: Game, Game Time, P(Start), Model Probability, Edge, Kelly Sizing, Best Book
+    - Footer: Model version + simulation count
+
+- **Configuration Extensions**
+  - Added `discord_guild_id` (required, guild snowflake ID)
+  - Added `free_pick_channel` (default "free-picks")
+  - Added `paid_channels` (default list of 5 paid channels)
+  - Added `announcements_channel` (default "announcements")
+  - Added `free_pick_window_min` (default 60 minutes before first pitch)
+  - Added `free_pick_window_max` (default 90 minutes before first pitch)
+
+- **Contracts**
+  - Channel structure: 7 channels with specific names and visibility rules
+  - TeamMarketEmbed: 9 fields (title, game_time, side, model_prob, edge, kelly, best_book, footer)
+  - PlayerPropEmbed: 10 fields (title, game_time, p_start, model_prob, edge, kelly, best_book, footer)
+  - Publisher reads subscriptions.tier and subscriptions.status but never writes to subscriptions table
+  - Anti-spam state is in-memory, not persisted (reset on bot restart)
+
+### Tests Added
+Comprehensive test coverage in `tests/test_discord.py` (15+ test cases):
+- **AC1 - Bot connects**: (Validated via MLBPicksBot class structure, integration test deferred)
+- **AC2 - Channels created**: ensure_channels() creates all 7 channels with correct names and permissions
+- **AC3 - Team market published**: publish_picks() sends team market embed with all required fields
+- **AC4 - Player prop published**: publish_picks() sends player prop embed for confirmed lineup player
+- **AC5 - Publishing gate enforced**: Player with p_start=0.60 and unconfirmed lineup NOT published; team market on same game IS published
+- **AC6 - Free pick timing**: publish_free_pick() selects game in 60-90 min window, not 30 or 120 min
+- **AC7 - Free pick uniqueness**: Calling publish_free_pick() twice in same day posts only once
+- **AC8 - Anti-spam**: Consecutive publish_picks() edits existing message, not duplicate
+- **AC9 - Tier gating**: sync_member_permissions() grants paid users access, revokes free users
+- **AC10 - Negative/zero edge**: Query filters ensure edge > 0 AND kelly_fraction > 0 (rows with edge <= 0 never fetched)
+- **Formatter tests**: Validates all embed fields populated correctly for both team markets and player props
+- **Channel reuse test**: Existing channels not recreated on subsequent ensure_channels() calls
+- **Permission sync tests**: Paid subscriber gets read_messages=True, free user gets overwrite=None
+
+### Known Limitations
+- **No real Discord integration in tests**: All Discord API calls are mocked (integration testing with live bot deferred to deployment)
+- **Best odds stubbed**: `best_book` and `best_price` are placeholders in v1 (query odds_snapshots in v2)
+- **Anti-spam state is in-memory**: Message cache lost on bot restart, may re-post picks for already-published games
+- **No DM-based delivery**: All picks published to guild channels only
+- **No user commands**: Bot is publish-only, no `/picks`, `/subscribe`, or interactive features (D-047)
+- **No live betting alerts**: v1 exclusion per spec
+- **No role-based permission grants**: sync_member_permissions() sets per-user overwrites, not Discord role assignments (Unit 11 manages role sync)
+- **Free pick selection is naive**: Highest edge only, no diversity/showmanship optimization
+- **No message editing for non-existent messages**: If message_id is cached but message was deleted, falls back to new post (acceptable for v1)
+- **No channel category organization**: All channels created at root level (not grouped by market type)
+- **No rate limiting**: Bot may hit Discord API rate limits if publishing many picks rapidly (deferred to v2)
+
+### Dependency Notes
+- **discord.py>=2.3 added for Discord bot SDK**
+
+### What's Next
+**Unit 11**: Stripe Integration & Subscription Management
+- Implement Stripe webhook handlers for subscription events
+- Write to subscriptions table on payment success/failure
+- Sync Discord roles on subscription tier changes
+- Handle subscription cancellations and renewals
+
+---

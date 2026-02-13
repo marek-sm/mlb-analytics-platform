@@ -6,7 +6,7 @@ MLB analytics platform with Monte Carlo simulation and Discord publishing.
 
 This platform provides analytical capabilities for Major League Baseball data through probabilistic modeling (Monte Carlo simulations) with automated insights delivery. Built with Python 3.11+ using async patterns throughout.
 
-**Current Status:** Unit 9 complete (scheduler & orchestration pipeline). See [DEVLOG.md](docs/DEVLOG.md) for implementation details and [DECISIONS.md](docs/DECISIONS.md) for architectural choices.
+**Current Status:** Unit 10 complete (Discord bot & publishing layer). See [DEVLOG.md](docs/DEVLOG.md) for implementation details and [DECISIONS.md](docs/DECISIONS.md) for architectural choices.
 
 ## Installation
 
@@ -54,6 +54,12 @@ Configuration is via environment variables (12-factor). See [.env.example](.env.
 - `RERUN_THROTTLE_MINUTES`: Minimum gap between reruns per game (1-60, default: 10)
 - `P_START_THRESHOLD`: Publishing gate threshold for p_start (0.0-1.0, default: 0.85)
 - `MAX_RETRY_ATTEMPTS`: Maximum ingestion retry attempts (0-5, default: 2)
+- `DISCORD_GUILD_ID`: Discord guild (server) ID for bot operations
+- `FREE_PICK_CHANNEL`: Channel name for daily free picks (default: "free-picks")
+- `PAID_CHANNELS`: Channel names for paid-tier picks (default: ["team-moneyline", "team-runline", "team-totals", "player-props-h", "player-props-p"])
+- `ANNOUNCEMENTS_CHANNEL`: Channel name for bot announcements (default: "announcements")
+- `FREE_PICK_WINDOW_MIN`: Earliest time before first_pitch to post free pick in minutes (30-120, default: 60)
+- `FREE_PICK_WINDOW_MAX`: Latest time before first_pitch to post free pick in minutes (30-120, default: 90)
 - `LOG_LEVEL`: Logging verbosity
 
 ## Usage
@@ -138,7 +144,15 @@ mypy src
   - Player props require confirmed lineup OR p_start >= threshold (default 0.85)
   - Cron-compatible entry points (4 zero-argument functions)
   - Nightly evaluation trigger for completed games
-- Discord publishing of analytical insights
+- Discord bot & publishing layer (Unit 10)
+  - Bot lifecycle management with graceful startup/shutdown (SIGTERM/SIGINT handling)
+  - 7-channel structure: #free-picks (public), 5 paid channels, #announcements
+  - Tier-based permission sync (paid vs free subscribers)
+  - Pick publishing with anti-spam (message editing on reruns, in-memory cache)
+  - Free pick selection (highest-edge team market, 60-90 min window)
+  - Structured Discord embeds (team markets & player props with all fields)
+  - Publish-only in v1 (no user commands or interactive features)
+  - Respects publishing gate and positive-edge filtering (edge > 0, kelly > 0)
 
 **Non-Goals for V1:**
 
@@ -203,6 +217,11 @@ mlb-analytics-platform/
 │   │   ├── cron.py       # Cron-compatible entry points
 │   │   ├── events.py     # Change detection and rerun throttle
 │   │   └── gate.py       # Publishing gate logic (is_publishable)
+│   ├── discord_bot/      # Discord bot and publishing layer
+│   │   ├── bot.py        # Bot lifecycle (MLBPicksBot class, startup/shutdown)
+│   │   ├── channels.py   # Channel creation and permission sync
+│   │   ├── publisher.py  # Pick publishing (Publisher class, anti-spam, free pick)
+│   │   └── formatter.py  # Discord embed formatting (pure functions)
 │   └── main.py           # Application entry point
 ├── tests/                # Test suite
 │   ├── conftest.py         # Pytest fixtures and configuration
@@ -214,7 +233,8 @@ mlb-analytics-platform/
 │   ├── test_simulation.py  # Monte Carlo simulation tests
 │   ├── test_edge.py        # Odds processing and edge calculation tests
 │   ├── test_evaluation.py  # Evaluation and backtesting tests
-│   └── test_scheduler.py   # Scheduler and orchestration tests
+│   ├── test_scheduler.py   # Scheduler and orchestration tests
+│   └── test_discord.py     # Discord bot and publishing tests
 ├── docs/                 # Documentation
 │   ├── DEVLOG.md        # Development log
 │   └── DECISIONS.md     # Architecture decision records

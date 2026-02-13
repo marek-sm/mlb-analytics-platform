@@ -389,3 +389,37 @@ This document tracks key architectural and implementation decisions made through
 **Rationale**: Spec §Lineup Uncertainty Policy: "P(start) ≥ 0.85–0.90." Lower end chosen as default to maximize coverage. Team market exemption follows from spec: "public outputs limited to informational summaries" applies only to player props pre-lineup.
 
 ---
+
+## Unit 10: Discord Bot & Publishing Layer
+
+### D-047: Discord bot is publish-only in v1. No user commands, no interactive features.
+
+**Decision**: Discord bot is publish-only in v1. No user commands, no interactive features.
+
+**Rationale**: Spec: "structured channels by market" and "emphasis on reliability and clarity." Interactive commands add complexity with no spec requirement.
+
+---
+
+### D-048: Free pick selection: highest absolute edge among team market plays for games with first_pitch in the [60, 90]-minute window, after lineup confirmation.
+
+**Decision**: Free pick selection: highest absolute edge among team market plays for games with first_pitch in the [60, 90]-minute window, after lineup confirmation.
+
+**Rationale**: Spec: "free pick posted 60–90 minutes before first pitch after lineup confirmation." Highest-edge selection maximizes showcase value.
+
+---
+
+### D-049: Anti-spam: one message per (game_id, market, side) per channel. Reruns edit existing messages. Message-ID tracking is in-memory, not persisted.
+
+**Decision**: Anti-spam: one message per (game_id, market, side) per channel. Reruns edit existing messages. Message-ID tracking is in-memory, not persisted.
+
+**Rationale**: Spec: "anti-spam publishing rules." In-memory tracking is sufficient for a single-process bot. Persistence deferred to v2.
+
+---
+
+### D-050: Only positive-edge plays (edge > 0 AND kelly_fraction > 0) are published.
+
+**Decision**: Only positive-edge plays (edge > 0 AND kelly_fraction > 0) are published.
+
+**Rationale**: Publishing zero or negative edge plays provides no value and undermines subscriber trust. Consistent with spec: this is a projections platform, not a firehose.
+
+---
