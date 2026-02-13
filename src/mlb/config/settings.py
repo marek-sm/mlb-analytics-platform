@@ -164,6 +164,32 @@ class AppConfig(BaseSettings):
         le=120,
         description="Latest time before first_pitch to post free pick (minutes)",
     )
+    stripe_webhook_secret: SecretStr = Field(
+        default=SecretStr(""),
+        description="Stripe webhook signing secret",
+    )
+    stripe_price_id: str = Field(
+        default="",
+        description="Stripe Price ID for the subscription product",
+    )
+    checkout_success_url: str = Field(
+        default="https://discord.com",
+        description="Stripe Checkout success redirect URL",
+    )
+    checkout_cancel_url: str = Field(
+        default="https://discord.com",
+        description="Stripe Checkout cancel redirect URL",
+    )
+    webhook_server_port: int = Field(
+        default=8080,
+        ge=1024,
+        le=65535,
+        description="Port for Stripe webhook HTTP server",
+    )
+    discord_paid_role_name: str = Field(
+        default="Subscriber",
+        description="Discord role name for paid subscribers",
+    )
 
     @field_validator("db_pool_max")
     @classmethod

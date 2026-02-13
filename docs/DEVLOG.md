@@ -822,3 +822,101 @@ Comprehensive test coverage in `tests/test_discord.py` (15+ test cases):
 - Handle subscription cancellations and renewals
 
 ---
+
+## 2026-02-13: Unit 11 - Stripe Subscription & Webhook Integration
+
+### What Shipped
+- **Checkout Session Creation (`payments/checkout.py`)**
+  - `create_checkout_url(discord_user_id)`: Generates Stripe Checkout Session URLs for subscription signup
+  - Passes `discord_user_id` as `client_reference_id` to link payment to Discord identity (D-054)
+  - Uses configured `stripe_price_id` for single subscription tier (D-051)
+  - Returns session.url for redirect
+  - Validates config (stripe_secret, stripe_price_id) before Stripe API call
+
+- **Webhook Handler (`payments/webhooks.py`)**
+  - `handle_webhook(payload, sig_header, bot_client)`: Main webhook entry point with signature verification
+  - Stripe signature verification using `stripe.Webhook.construct_event()` (AC#2)
+  - Event routing to specialized handlers:
+    - `checkout.session.completed`: Creates subscription with tier='paid', status='active'
+    - `invoice.paid`: Updates status='active', refreshes current_period_end
+    - `invoice.payment_failed`: Sets status='past_due', tier remains 'paid'
+    - `customer.subscription.updated`: Syncs status from Stripe (active/trialing → active, canceled/unpaid → cancelled+free, past_due → past_due+paid)
+    - `customer.subscription.deleted`: Sets tier='free', status='cancelled'
+  - Unknown event types acknowledged with 200 (no processing, AC#10)
+  - Returns HTTP 400 for invalid signature, 500 for processing errors (Stripe will retry)
+
+- **Subscription State Sync (`payments/sync.py`)**
+  - `sync_subscription(discord_user_id, stripe_customer_id, tier, status, current_period_end, bot_client)`: Updates database and Discord roles
+  - Upserts `subscriptions` table using `ON CONFLICT (discord_user_id) DO UPDATE` (idempotent, AC#9)
+  - Best-effort Discord role sync (D-053):
+    - Grants "Subscriber" role when tier='paid' AND status='active'
+    - Revokes "Subscriber" role when tier='free' OR status != 'active'
+    - Creates role if it doesn't exist
+    - Logs errors but doesn't fail webhook if Discord API unavailable
+  - Skips role sync with warning if bot_client is None
+
+- **Webhook Server (`payments/server.py`)**
+  - Lightweight aiohttp HTTP server for `POST /webhooks/stripe` endpoint
+  - `create_app(bot_client)`: Creates aiohttp Application with webhook route
+  - `run_server(bot_client, shutdown_event)`: Runs server on configured port (default 8080)
+  - Standalone process (D-052): decoupled from Discord bot, handles Stripe retries independently
+  - Signal handling (SIGTERM/SIGINT) for graceful shutdown
+  - `main()`: CLI entry point for standalone webhook server
+
+- **Configuration Extensions**
+  - Added `stripe_webhook_secret: SecretStr` (Stripe webhook signing secret)
+  - Added `stripe_price_id: str` (Stripe Price ID for subscription product)
+  - Added `checkout_success_url: str` (default "https://discord.com")
+  - Added `checkout_cancel_url: str` (default "https://discord.com")
+  - Added `webhook_server_port: int` (default 8080, range [1024, 65535])
+  - Added `discord_paid_role_name: str` (default "Subscriber")
+
+- **Contracts**
+  - `create_checkout_url(discord_user_id: str) → str`: Returns Stripe Checkout URL
+  - `handle_webhook(payload: bytes, sig_header: str, bot_client: Optional[discord.Client]) → web.Response`
+  - `sync_subscription(discord_user_id, stripe_customer_id, tier, status, current_period_end, bot_client)`: Upserts subscriptions, syncs Discord role
+  - Subscriptions table fields: discord_user_id (unique), stripe_customer_id, tier ('free'|'paid'), status ('active'|'cancelled'|'past_due'), current_period_end (TIMESTAMPTZ)
+
+### Tests Added
+Comprehensive test coverage in `tests/test_payments.py` (18 test classes, 25+ test cases):
+- **AC1 - Checkout URL generation**: create_checkout_url() returns valid Stripe Checkout URL with correct session parameters
+- **AC2 - Webhook signature verification**: Valid signature processed, invalid signature returns 400 and no database write
+- **AC3 - checkout.session.completed**: Creates subscription with tier='paid', status='active', stripe_customer_id, current_period_end
+- **AC4 - invoice.paid**: Updates status='active', refreshes current_period_end
+- **AC5 - invoice.payment_failed**: Sets status='past_due', tier remains 'paid'
+- **AC6 - customer.subscription.deleted**: Sets tier='free', status='cancelled'
+- **AC7 - Discord role grant**: Role granted when tier='paid' AND status='active' (subscription activation)
+- **AC8 - Discord role revoke**: Role revoked when tier='free' OR status='cancelled' (subscription deleted)
+- **AC9 - Idempotent**: Replaying same webhook produces same database state (upsert, not duplicate)
+- **AC10 - Unknown events**: charge.refunded event returns 200, no database write
+- **AC11 - Server starts**: Webhook server creates app with POST /webhooks/stripe route, rejects requests without signature header
+- **Edge cases**: Missing client_reference_id (logged and skipped), Discord API unavailable (database updated, role sync skipped with error log), missing config validation
+
+### Known Limitations
+- **Single subscription tier only**: V1 supports free and paid tiers only, no intermediate tiers (D-051)
+- **Webhook server is standalone**: Must be deployed as separate process from Discord bot (D-052)
+- **Role sync is best-effort**: Database is source of truth; Discord role is eventually consistent (D-053)
+- **discord_user_id from client_reference_id only**: Webhooks without client_reference_id (e.g., subscriptions created outside bot flow) are skipped (D-054)
+- **No refund automation**: Refunds handled manually via Stripe dashboard in v1
+- **No pricing experimentation**: Single plan only (price changes require config update)
+- **No admin dashboard**: Subscription management via Stripe dashboard only
+- **No user-facing commands**: Checkout URL must be shared manually (e.g., in #announcements)
+- **No proration or plan changes**: Single plan in v1, changes not supported
+- **No customer portal**: Users cannot self-manage subscriptions (Stripe Customer Portal deferred to v2)
+- **Discord role creation on-demand**: Role created on first subscription if it doesn't exist (not pre-seeded)
+- **Invoice lookup by stripe_customer_id**: invoice.paid and invoice.payment_failed require database lookup to find discord_user_id (adds latency)
+- **No webhook replay protection**: Stripe's idempotency is implicit; explicit event_id tracking deferred to v2
+
+### Dependency Notes
+- **stripe>=7.0 added for Stripe API SDK**
+- **aiohttp>=3.9 added for webhook HTTP server**
+
+### What's Next
+**Unit 12**: Deployment & Operations
+- Document deployment architecture (webhook server + Discord bot + cron scheduler)
+- Create systemd service files for webhook server and Discord bot
+- Document environment variable configuration for production
+- Add health check endpoints
+- Logging and monitoring setup
+
+---

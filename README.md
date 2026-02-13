@@ -6,7 +6,7 @@ MLB analytics platform with Monte Carlo simulation and Discord publishing.
 
 This platform provides analytical capabilities for Major League Baseball data through probabilistic modeling (Monte Carlo simulations) with automated insights delivery. Built with Python 3.11+ using async patterns throughout.
 
-**Current Status:** Unit 10 complete (Discord bot & publishing layer). See [DEVLOG.md](docs/DEVLOG.md) for implementation details and [DECISIONS.md](docs/DECISIONS.md) for architectural choices.
+**Current Status:** Unit 11 complete (Stripe subscription & webhook integration). See [DEVLOG.md](docs/DEVLOG.md) for implementation details and [DECISIONS.md](docs/DECISIONS.md) for architectural choices.
 
 ## Installation
 
@@ -60,6 +60,12 @@ Configuration is via environment variables (12-factor). See [.env.example](.env.
 - `ANNOUNCEMENTS_CHANNEL`: Channel name for bot announcements (default: "announcements")
 - `FREE_PICK_WINDOW_MIN`: Earliest time before first_pitch to post free pick in minutes (30-120, default: 60)
 - `FREE_PICK_WINDOW_MAX`: Latest time before first_pitch to post free pick in minutes (30-120, default: 90)
+- `STRIPE_WEBHOOK_SECRET`: Stripe webhook signing secret
+- `STRIPE_PRICE_ID`: Stripe Price ID for subscription product
+- `CHECKOUT_SUCCESS_URL`: Stripe Checkout success redirect URL (default: "https://discord.com")
+- `CHECKOUT_CANCEL_URL`: Stripe Checkout cancel redirect URL (default: "https://discord.com")
+- `WEBHOOK_SERVER_PORT`: Port for Stripe webhook HTTP server (1024-65535, default: 8080)
+- `DISCORD_PAID_ROLE_NAME`: Discord role name for paid subscribers (default: "Subscriber")
 - `LOG_LEVEL`: Logging verbosity
 
 ## Usage
@@ -153,6 +159,14 @@ mypy src
   - Structured Discord embeds (team markets & player props with all fields)
   - Publish-only in v1 (no user commands or interactive features)
   - Respects publishing gate and positive-edge filtering (edge > 0, kelly > 0)
+- Stripe subscription & webhook integration (Unit 11)
+  - Checkout session creation with discord_user_id linking via client_reference_id
+  - Webhook signature verification using Stripe signing secret
+  - Event handlers for 5 subscription lifecycle events (checkout completed, invoice paid/failed, subscription updated/deleted)
+  - Idempotent subscription state sync to subscriptions table (tier, status, stripe_customer_id, current_period_end)
+  - Best-effort Discord role management (grant "Subscriber" role on paid/active, revoke on free/cancelled)
+  - Standalone aiohttp webhook server (POST /webhooks/stripe) decoupled from Discord bot
+  - Single subscription tier (free and paid) with two-way state transitions
 
 **Non-Goals for V1:**
 
@@ -160,7 +174,7 @@ mypy src
 - Real-time streaming data ingestion
 - Web UI or REST API (Discord-only output)
 - Historical data backfill beyond current season
-- Advanced monetization features (Stripe integration placeholder only)
+- Advanced monetization features (multiple tiers, proration, refund automation, customer portal)
 - Mobile applications
 
 ## Project Structure
@@ -222,6 +236,11 @@ mlb-analytics-platform/
 │   │   ├── channels.py   # Channel creation and permission sync
 │   │   ├── publisher.py  # Pick publishing (Publisher class, anti-spam, free pick)
 │   │   └── formatter.py  # Discord embed formatting (pure functions)
+│   ├── payments/         # Stripe subscription and webhook integration
+│   │   ├── checkout.py   # Checkout session creation
+│   │   ├── webhooks.py   # Webhook handler and event routing
+│   │   ├── sync.py       # Subscription state sync and Discord role management
+│   │   └── server.py     # Standalone aiohttp webhook server
 │   └── main.py           # Application entry point
 ├── tests/                # Test suite
 │   ├── conftest.py         # Pytest fixtures and configuration
@@ -234,7 +253,8 @@ mlb-analytics-platform/
 │   ├── test_edge.py        # Odds processing and edge calculation tests
 │   ├── test_evaluation.py  # Evaluation and backtesting tests
 │   ├── test_scheduler.py   # Scheduler and orchestration tests
-│   └── test_discord.py     # Discord bot and publishing tests
+│   ├── test_discord.py     # Discord bot and publishing tests
+│   └── test_payments.py    # Stripe subscription and webhook tests
 ├── docs/                 # Documentation
 │   ├── DEVLOG.md        # Development log
 │   └── DECISIONS.md     # Architecture decision records

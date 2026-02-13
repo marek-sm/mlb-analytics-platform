@@ -423,3 +423,37 @@ This document tracks key architectural and implementation decisions made through
 **Rationale**: Publishing zero or negative edge plays provides no value and undermines subscriber trust. Consistent with spec: this is a projections platform, not a firehose.
 
 ---
+
+## Unit 11: Stripe Subscription & Webhook Integration
+
+### D-051: Single subscription tier: free and paid. No intermediate tiers in v1.
+
+**Decision**: Single subscription tier: free and paid. No intermediate tiers in v1.
+
+**Rationale**: Spec: "Discord bot + Stripe webhooks" with free pick + paid content. Simplest monetization model. Multiple tiers deferred to v2.
+
+---
+
+### D-052: Webhook server is a standalone lightweight HTTP process (e.g., aiohttp or FastAPI), not embedded in the Discord bot process.
+
+**Decision**: Webhook server is a standalone lightweight HTTP process (e.g., aiohttp or FastAPI), not embedded in the Discord bot process.
+
+**Rationale**: Decouples payment handling from bot uptime. A bot restart doesn't drop webhook deliveries. Stripe retries failed deliveries for up to 72 hours.
+
+---
+
+### D-053: Discord role sync is best-effort. If Discord API is unavailable during webhook processing, the database is still updated. Role is corrected on next bot startup or manual sync.
+
+**Decision**: Discord role sync is best-effort. If Discord API is unavailable during webhook processing, the database is still updated. Role is corrected on next bot startup or manual sync.
+
+**Rationale**: Database is the source of truth for tier state. Discord role is a cache for channel permissions. Eventual consistency is acceptable.
+
+---
+
+### D-054: discord_user_id is passed via Stripe's client_reference_id at checkout. Webhooks that lack this field are logged and skipped.
+
+**Decision**: discord_user_id is passed via Stripe's client_reference_id at checkout. Webhooks that lack this field are logged and skipped.
+
+**Rationale**: Links Stripe customer to Discord identity without requiring a separate mapping table. Sufficient for single-plan v1.
+
+---
