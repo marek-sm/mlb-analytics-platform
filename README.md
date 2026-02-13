@@ -6,7 +6,7 @@ MLB analytics platform with Monte Carlo simulation and Discord publishing.
 
 This platform provides analytical capabilities for Major League Baseball data through probabilistic modeling (Monte Carlo simulations) with automated insights delivery. Built with Python 3.11+ using async patterns throughout.
 
-**Current Status:** Unit 8 complete (evaluation & backtesting harness). See [DEVLOG.md](docs/DEVLOG.md) for implementation details and [DECISIONS.md](docs/DECISIONS.md) for architectural choices.
+**Current Status:** Unit 9 complete (scheduler & orchestration pipeline). See [DEVLOG.md](docs/DEVLOG.md) for implementation details and [DECISIONS.md](docs/DECISIONS.md) for architectural choices.
 
 ## Installation
 
@@ -47,6 +47,13 @@ Configuration is via environment variables (12-factor). See [.env.example](.env.
 - `BF_PER_OUT_RATIO`: League-average batters faced per out for K/BF approximation (1.0-2.0, default: 1.35)
 - `MIN_EDGE_THRESHOLD`: Minimum edge for kelly_fraction > 0 (0.0-0.10, default: 0.02)
 - `KELLY_FRACTION_MULTIPLIER`: Fractional Kelly multiplier (0.05-1.0, default: 0.25)
+- `SCHEDULE_NIGHT_BEFORE_ET`: ET time for night-before global run (default: "22:00")
+- `SCHEDULE_MORNING_ET`: ET time for morning global run (default: "08:00")
+- `SCHEDULE_MIDDAY_ET`: ET time for midday global run (default: "12:00")
+- `GAME_RUN_T_MINUS_MINUTES`: Minutes before first_pitch for per-game runs (default: [90, 30])
+- `RERUN_THROTTLE_MINUTES`: Minimum gap between reruns per game (1-60, default: 10)
+- `P_START_THRESHOLD`: Publishing gate threshold for p_start (0.0-1.0, default: 0.85)
+- `MAX_RETRY_ATTEMPTS`: Maximum ingestion retry attempts (0-5, default: 2)
 - `LOG_LEVEL`: Logging verbosity
 
 ## Usage
@@ -121,6 +128,16 @@ mypy src
   - Market-specific calibration models (isotonic regression, Platt scaling)
   - Per-metric upsert to eval_results table (FC-20 safe partial writes)
   - Comprehensive test coverage (19 tests) for all evaluation contracts
+- Scheduler & orchestration pipeline (Unit 9)
+  - Global scheduled runs (night-before, morning, midday) with full end-to-end pipeline
+  - Per-game runs at T-90 and T-30 minutes before first pitch
+  - Event-driven reruns with configurable throttle window (default 10 minutes)
+  - Retry policy with exponential backoff for ingestion failures
+  - Publishing gate logic enforcing lineup uncertainty policy
+  - Team markets always publishable when edge computed
+  - Player props require confirmed lineup OR p_start >= threshold (default 0.85)
+  - Cron-compatible entry points (4 zero-argument functions)
+  - Nightly evaluation trigger for completed games
 - Discord publishing of analytical insights
 
 **Non-Goals for V1:**
@@ -181,6 +198,11 @@ mlb-analytics-platform/
 │   │   ├── backtest.py   # Rolling-origin backtest orchestration
 │   │   ├── calibration.py # Market-specific calibration models
 │   │   └── persistence.py # Eval results persistence
+│   ├── scheduler/        # Scheduler and orchestration pipeline
+│   │   ├── pipeline.py   # Pipeline orchestration (run_global, run_game, run_daily_eval)
+│   │   ├── cron.py       # Cron-compatible entry points
+│   │   ├── events.py     # Change detection and rerun throttle
+│   │   └── gate.py       # Publishing gate logic (is_publishable)
 │   └── main.py           # Application entry point
 ├── tests/                # Test suite
 │   ├── conftest.py         # Pytest fixtures and configuration
@@ -191,7 +213,8 @@ mlb-analytics-platform/
 │   ├── test_player_props.py # Player prop model tests
 │   ├── test_simulation.py  # Monte Carlo simulation tests
 │   ├── test_edge.py        # Odds processing and edge calculation tests
-│   └── test_evaluation.py  # Evaluation and backtesting tests
+│   ├── test_evaluation.py  # Evaluation and backtesting tests
+│   └── test_scheduler.py   # Scheduler and orchestration tests
 ├── docs/                 # Documentation
 │   ├── DEVLOG.md        # Development log
 │   └── DECISIONS.md     # Architecture decision records

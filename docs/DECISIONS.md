@@ -355,3 +355,37 @@ This document tracks key architectural and implementation decisions made through
 **Rationale**: Prevents accumulation of stale eval rows when models are updated and re-evaluated.
 
 ---
+
+## Unit 9: Scheduler & Orchestration Pipeline
+
+### D-043: Three global runs at 10 PM, 8 AM, 12 PM ET. Times configurable in AppConfig.
+
+**Decision**: Three global runs at 10 PM, 8 AM, 12 PM ET. Times configurable in AppConfig.
+
+**Rationale**: Spec: "night-before, morning, and midday global runs." ET aligns with MLB scheduling (most games 1 PM–10 PM ET).
+
+---
+
+### D-044: Per-game runs at T−90 and T−30 minutes before first_pitch. Configurable list.
+
+**Decision**: Per-game runs at T−90 and T−30 minutes before first_pitch. Configurable list.
+
+**Rationale**: Spec: "per-game scheduling relative to first pitch." Two runs balance freshness vs. compute cost within budget.
+
+---
+
+### D-045: Rerun throttle: at most 1 event-driven rerun per game per 10-minute window.
+
+**Decision**: Rerun throttle: at most 1 event-driven rerun per game per 10-minute window.
+
+**Rationale**: Prevents pipeline thrashing on rapid lineup/odds changes. §Execution & Automation: "event-driven reruns."
+
+---
+
+### D-046: Publishing gate threshold: p_start ≥ 0.85 (configurable). Team markets exempt — always publishable when edge is computed.
+
+**Decision**: Publishing gate threshold: p_start ≥ 0.85 (configurable). Team markets exempt — always publishable when edge is computed.
+
+**Rationale**: Spec §Lineup Uncertainty Policy: "P(start) ≥ 0.85–0.90." Lower end chosen as default to maximize coverage. Team market exemption follows from spec: "public outputs limited to informational summaries" applies only to player props pre-lineup.
+
+---

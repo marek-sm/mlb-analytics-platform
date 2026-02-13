@@ -631,3 +631,95 @@ Comprehensive test coverage in `tests/test_evaluation.py` (25+ test cases):
 - Add Discord notification hooks (v1 basic: "projection complete")
 
 ---
+## 2026-02-12: Unit 9 - Scheduler & Orchestration Pipeline
+
+### What Shipped
+- **Pipeline Orchestration (`scheduler/pipeline.py`)**
+  - `run_global()`: End-to-end pipeline for all games on a date
+    - Steps: fetch schedule → ingest odds → ingest weather → (per-game: lineups → models → simulation → edge)
+    - Three run types: night_before, morning, midday (D-043)
+    - Skips postponed games automatically
+    - Conservative: logs and skips on failures after retries
+  - `run_game()`: Per-game pipeline for T-90, T-30 runs and event-driven reruns (D-044)
+    - Same steps as global run but for single game
+    - Checks game status before processing
+  - `run_daily_eval()`: Nightly evaluation trigger
+    - Runs backtest for all major markets (ml, rl, total, team_total) for today's final games
+    - Writes results to eval_results table
+  - `_process_game()`: Orchestrates lineups → team models → simulation → edge computation
+    - Sets edge_computed_at timestamp for publishing gate
+  - `_retry_ingestion()`: Exponential backoff retry wrapper for all ingestion operations
+    - Up to max_retry_attempts (default 2), backoff: 1s, 2s, 4s
+    - Conservative fallback: returns empty on failure
+
+- **Cron Entry Points (`scheduler/cron.py`)**
+  - `night_before_run()`, `morning_run()`, `midday_run()`: Global run entry points
+  - `nightly_eval_run()`: Evaluation entry point
+  - All callable with no arguments for cron/scheduler integration
+  - Each wraps async pipeline call in asyncio.run()
+
+- **Event Detection & Throttle (`scheduler/events.py`)**
+  - `check_for_changes()`: Detects lineup confirmations, pitcher changes, odds movements
+    - Returns list of ChangeEvent objects
+    - V1: simplified detection (lineup confirmed only)
+  - `trigger_rerun_if_needed()`: Checks for changes and triggers rerun if throttle allows
+    - Rerun throttle: at most 1 rerun per game per 10-minute window (D-045)
+    - In-memory throttle state (game_id → last_rerun_ts)
+
+- **Publishing Gate (`scheduler/gate.py`)**
+  - `is_publishable()`: Determines if projection is eligible for publication (D-046)
+    - Team markets (player_id=None): publishable if edge_computed_at IS NOT NULL
+    - Player props (player_id is not None): publishable if edge_computed_at IS NOT NULL AND (lineup confirmed OR p_start >= threshold)
+    - p_start_threshold configurable (default 0.85)
+    - Enforces lineup uncertainty policy
+
+- **Configuration Extensions**
+  - Added `schedule_night_before_et` (default "22:00"), `schedule_morning_et` ("08:00"), `schedule_midday_et` ("12:00") (D-043)
+  - Added `game_run_t_minus_minutes` (default [90, 30]) for per-game scheduling (D-044)
+  - Added `rerun_throttle_minutes` (default 10) for event-driven rerun throttle (D-045)
+  - Added `p_start_threshold` (default 0.85) for publishing gate (D-046)
+  - Added `max_retry_attempts` (default 2) for ingestion retry policy
+
+- **Contracts**
+  - `run_global(run_type)`: run_type in ['night_before', 'morning', 'midday']
+  - `run_game(game_id)`: Processes single game
+  - `run_daily_eval()`: Triggers evaluation for today's final games
+  - `ChangeEvent`: game_id, event_type, detected_at
+  - `is_publishable(game_id, market, player_id?)`: Returns bool
+
+### Tests Added
+Comprehensive test coverage in `tests/test_scheduler.py` (13 test cases):
+- **AC1 - Global run end-to-end**: Completes all pipeline steps for 2 games with mocked ingestion
+- **AC2 - Per-game run**: Processes exactly one game, ingestion called correctly
+- **AC3 - Lineup gate confirmed**: Confirmed lineup allows player props to pass gate even with low p_start
+- **AC4 - Lineup gate high p_start**: p_start=0.90 passes, p_start=0.60 fails with unconfirmed lineup
+- **AC5 - Lineup gate team markets**: Team markets always pass when edge computed, regardless of lineup state
+- **AC6 - Rerun throttle**: First trigger succeeds, second within 10min is blocked, third after 15min succeeds
+- **AC7 - Retry on ingestion failure**: Retries up to 3 times with exponential backoff, succeeds on 3rd attempt
+- **AC8 - Nightly eval**: Triggers backtest for final games, writes eval_results rows
+- **AC9 - Cron entry points**: All 4 functions are callable with no arguments, correct signatures verified
+- **Edge case - No games today**: run_global completes without error, no ingestion writes
+- **Edge case - Postponed game skipped**: run_game skips postponed games, _process_game not called
+
+### Known Limitations
+- Per-game scheduling (T-90, T-30) is not automated in v1 (cron entry points only, no scheduler daemon)
+- Event-driven reruns require manual triggering via `trigger_rerun_if_needed()` (no continuous polling)
+- Rerun throttle state is in-memory only (cleared on restart; production should use Redis or DB)
+- Change detection is simplified in v1 (lineup confirmed only; pitcher change and odds movement detection not implemented)
+- No system-level cron configuration (crontab setup is deployment documentation, Unit 12)
+- Global run time conversions (ET ↔ UTC) use simplified UTC date (production should handle timezone correctly)
+- No circuit breaker or rate limiting on ingestion retries (may exhaust API quota on repeated failures)
+- Lineup confirmation detection lacks state tracking (can't distinguish new confirmation from pre-existing)
+- No dependency between run_global and run_game (could trigger overlapping runs; throttle mitigates but doesn't prevent)
+- Publishing gate queries database for each call (no caching; acceptable for v1 volume)
+- Daily eval runs for single date only (no multi-day backtest window in nightly run)
+- No graceful shutdown handling (in-flight pipeline runs may be interrupted)
+
+### What's Next
+**Unit 10**: Discord Bot
+- Integrate Discord bot SDK
+- Fetch publishable projections using `is_publishable()` gate
+- Format and send messages to Discord channels (tier-specific)
+- Handle user commands (/subscribe, /unsubscribe)
+
+---

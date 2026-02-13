@@ -98,6 +98,40 @@ class AppConfig(BaseSettings):
         le=1.0,
         description="Fractional Kelly multiplier (0.25 = quarter-Kelly) (D-038)",
     )
+    schedule_night_before_et: str = Field(
+        default="22:00",
+        description="ET time for night-before global run (D-043)",
+    )
+    schedule_morning_et: str = Field(
+        default="08:00",
+        description="ET time for morning global run (D-043)",
+    )
+    schedule_midday_et: str = Field(
+        default="12:00",
+        description="ET time for midday global run (D-043)",
+    )
+    game_run_t_minus_minutes: list[int] = Field(
+        default=[90, 30],
+        description="Minutes before first_pitch for per-game runs (D-044)",
+    )
+    rerun_throttle_minutes: int = Field(
+        default=10,
+        ge=1,
+        le=60,
+        description="Minimum gap between reruns per game (D-045)",
+    )
+    p_start_threshold: float = Field(
+        default=0.85,
+        ge=0.0,
+        le=1.0,
+        description="Publishing gate threshold for p_start (D-046)",
+    )
+    max_retry_attempts: int = Field(
+        default=2,
+        ge=0,
+        le=5,
+        description="Maximum ingestion retry attempts",
+    )
     log_level: str = Field(
         default="INFO",
         description="Logging level",
