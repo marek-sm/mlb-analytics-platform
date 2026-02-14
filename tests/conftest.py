@@ -3,6 +3,7 @@
 import pytest_asyncio
 
 from mlb.db.pool import get_pool, close_pool
+from mlb.db.schema.migrate import migrate
 
 
 @pytest_asyncio.fixture(scope="session")
@@ -15,6 +16,10 @@ async def pool():
     """
     # Get the pool
     pool = await get_pool()
+
+    # Apply migrations to ensure tables exist
+    await migrate()
+
     yield pool
 
     # Cleanup: close the pool after all tests

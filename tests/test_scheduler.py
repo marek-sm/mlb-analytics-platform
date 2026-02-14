@@ -19,7 +19,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from mlb.db.models import Table
-from mlb.db.pool import get_pool
 from mlb.scheduler.cron import midday_run, morning_run, night_before_run, nightly_eval_run
 from mlb.scheduler.events import ChangeEvent, check_for_changes, trigger_rerun_if_needed
 from mlb.scheduler.gate import is_publishable
@@ -32,9 +31,8 @@ from mlb.scheduler.pipeline import (
 
 
 @pytest.mark.asyncio
-async def test_global_run_end_to_end(test_db):
+async def test_global_run_end_to_end(pool):
     """AC1: Global run completes all pipeline steps for all games."""
-    pool = await get_pool()
 
     # Setup: Create 2 games for today
     today = date.today()
@@ -120,9 +118,8 @@ async def test_global_run_end_to_end(test_db):
 
 
 @pytest.mark.asyncio
-async def test_per_game_run(test_db):
+async def test_per_game_run(pool):
     """AC2: Per-game run produces outputs for exactly that game."""
-    pool = await get_pool()
     game_id = "2024_TEST_SINGLE"
     today = date.today()
 
@@ -169,9 +166,8 @@ async def test_per_game_run(test_db):
 
 
 @pytest.mark.asyncio
-async def test_lineup_gate_confirmed(test_db):
+async def test_lineup_gate_confirmed(pool):
     """AC3: Confirmed lineup allows player props to pass gate."""
-    pool = await get_pool()
     game_id = "2024_TEST_CONFIRMED"
     player_id = 101
     today = date.today()
@@ -235,9 +231,8 @@ async def test_lineup_gate_confirmed(test_db):
 
 
 @pytest.mark.asyncio
-async def test_lineup_gate_high_p_start(test_db):
+async def test_lineup_gate_high_p_start(pool):
     """AC4: High p_start allows player props even without confirmed lineup."""
-    pool = await get_pool()
     game_id = "2024_TEST_PSTART"
     player_id_high = 201
     player_id_low = 202
@@ -308,9 +303,8 @@ async def test_lineup_gate_high_p_start(test_db):
 
 
 @pytest.mark.asyncio
-async def test_lineup_gate_team_markets_exempt(test_db):
+async def test_lineup_gate_team_markets_exempt(pool):
     """AC5: Team markets always pass when edge is computed."""
-    pool = await get_pool()
     game_id = "2024_TEST_TEAM"
     today = date.today()
 
@@ -345,11 +339,10 @@ async def test_lineup_gate_team_markets_exempt(test_db):
 
 
 @pytest.mark.asyncio
-async def test_rerun_throttle(test_db):
+async def test_rerun_throttle(pool):
     """AC6: Rerun throttle prevents excessive reruns."""
     game_id = "2024_TEST_THROTTLE"
     today = date.today()
-    pool = await get_pool()
 
     # Setup game
     async with pool.acquire() as conn:
@@ -420,9 +413,8 @@ async def test_retry_on_ingestion_failure():
 
 
 @pytest.mark.asyncio
-async def test_nightly_eval(test_db):
+async def test_nightly_eval(pool):
     """AC8: Nightly eval triggers backtest for today's final games."""
-    pool = await get_pool()
     today = date.today()
     game_id = "2024_TEST_EVAL"
 
@@ -503,7 +495,7 @@ def test_cron_entry_points():
 
 
 @pytest.mark.asyncio
-async def test_no_games_today(test_db):
+async def test_no_games_today(pool):
     """Edge case: No games scheduled for today."""
     with patch("mlb.scheduler.pipeline.V1GameProvider") as mock_provider:
         mock_instance = mock_provider.return_value
@@ -518,9 +510,8 @@ async def test_no_games_today(test_db):
 
 
 @pytest.mark.asyncio
-async def test_postponed_game_skipped(test_db):
+async def test_postponed_game_skipped(pool):
     """Edge case: Postponed games are skipped during processing."""
-    pool = await get_pool()
     game_id = "2024_TEST_POSTPONED"
     today = date.today()
 

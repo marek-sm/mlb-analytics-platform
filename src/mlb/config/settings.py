@@ -10,8 +10,6 @@ class AppConfig(BaseSettings):
     """Application configuration loaded from environment variables."""
 
     model_config = SettingsConfigDict(
-        env_file=".env",
-        env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",
     )
@@ -21,7 +19,6 @@ class AppConfig(BaseSettings):
         description="Application environment",
     )
     db_dsn: PostgresDsn = Field(
-        ...,
         description="PostgreSQL database connection string",
     )
     db_pool_min: int = Field(
