@@ -253,7 +253,10 @@ async def test_lineup_confirmation_flip_db():
     finally:
         # Cleanup
         async with pool.acquire() as conn:
-            await conn.execute("DELETE FROM lineups WHERE game_id = 'test_game_1'")
+            # Delete all child rows first (session-scoped pool means data persists)
+            await conn.execute("DELETE FROM player_projections WHERE player_id BETWEEN 100 AND 208")
+            await conn.execute("DELETE FROM player_game_logs WHERE player_id BETWEEN 100 AND 208")
+            await conn.execute("DELETE FROM lineups WHERE player_id BETWEEN 100 AND 208")
             await conn.execute("DELETE FROM players WHERE player_id BETWEEN 100 AND 208")
             await conn.execute("DELETE FROM games WHERE game_id = 'test_game_1'")
 

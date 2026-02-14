@@ -192,6 +192,27 @@ async def test_lineup_gate_confirmed(pool):
     today = date.today()
 
     async with pool.acquire() as conn:
+        # Cleanup any existing data for this game_id
+        await conn.execute(
+            f"DELETE FROM {Table.PLAYER_PROJECTIONS} WHERE game_id = $1",
+            game_id,
+        )
+        await conn.execute(
+            f"DELETE FROM {Table.SIM_MARKET_PROBS} WHERE projection_id IN (SELECT projection_id FROM {Table.PROJECTIONS} WHERE game_id = $1)",
+            game_id,
+        )
+        await conn.execute(
+            f"DELETE FROM {Table.LINEUPS} WHERE game_id = $1",
+            game_id,
+        )
+        await conn.execute(
+            f"DELETE FROM {Table.PROJECTIONS} WHERE game_id = $1",
+            game_id,
+        )
+        await conn.execute(
+            f"DELETE FROM {Table.GAMES} WHERE game_id = $1",
+            game_id,
+        )
         # Insert game
         await conn.execute(
             f"""
@@ -259,8 +280,8 @@ async def test_lineup_gate_confirmed(pool):
         await conn.execute(
             f"""
             INSERT INTO {Table.PLAYER_PROJECTIONS}
-            (projection_id, player_id, game_id, stat, line, prob_over, p_start, created_at)
-            VALUES ($1, $2, $3, 'H', 1.5, 0.55, 0.75, now())
+            (projection_id, player_id, game_id, stat, line, prob_over, p_start)
+            VALUES ($1, $2, $3, 'H', 1.5, 0.55, 0.75)
             """,
             projection_id,
             player_id,
@@ -283,6 +304,27 @@ async def test_lineup_gate_high_p_start(pool):
     today = date.today()
 
     async with pool.acquire() as conn:
+        # Cleanup any existing data for this game_id
+        await conn.execute(
+            f"DELETE FROM {Table.PLAYER_PROJECTIONS} WHERE game_id = $1",
+            game_id,
+        )
+        await conn.execute(
+            f"DELETE FROM {Table.SIM_MARKET_PROBS} WHERE projection_id IN (SELECT projection_id FROM {Table.PROJECTIONS} WHERE game_id = $1)",
+            game_id,
+        )
+        await conn.execute(
+            f"DELETE FROM {Table.LINEUPS} WHERE game_id = $1",
+            game_id,
+        )
+        await conn.execute(
+            f"DELETE FROM {Table.PROJECTIONS} WHERE game_id = $1",
+            game_id,
+        )
+        await conn.execute(
+            f"DELETE FROM {Table.GAMES} WHERE game_id = $1",
+            game_id,
+        )
         # Insert game
         await conn.execute(
             f"""
@@ -356,10 +398,10 @@ async def test_lineup_gate_high_p_start(pool):
         await conn.execute(
             f"""
             INSERT INTO {Table.PLAYER_PROJECTIONS}
-            (projection_id, player_id, game_id, stat, line, prob_over, p_start, created_at)
+            (projection_id, player_id, game_id, stat, line, prob_over, p_start)
             VALUES
-            ($1, $2, $3, 'H', 1.5, 0.55, 0.90, now()),
-            ($1, $4, $3, 'H', 1.5, 0.50, 0.60, now())
+            ($1, $2, $3, 'H', 1.5, 0.55, 0.90),
+            ($1, $4, $3, 'H', 1.5, 0.50, 0.60)
             """,
             projection_id,
             player_id_high,

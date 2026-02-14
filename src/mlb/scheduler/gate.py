@@ -49,35 +49,39 @@ async def is_publishable(
     async with pool.acquire() as conn:
         # Team markets: check if edge computed
         if player_id is None:
-            # Get latest projection for this game
-            edge_computed = await conn.fetchval(
+            # Check if edge computed via sim_market_probs
+            edge_exists = await conn.fetchval(
                 f"""
-                SELECT edge_computed_at
-                FROM {Table.PROJECTIONS}
-                WHERE game_id = $1
-                ORDER BY run_ts DESC
+                SELECT 1
+                FROM {Table.SIM_MARKET_PROBS} smp
+                JOIN {Table.PROJECTIONS} p ON smp.projection_id = p.projection_id
+                WHERE p.game_id = $1 AND smp.edge_computed_at IS NOT NULL
                 LIMIT 1
                 """,
                 game_id,
             )
 
             # Team markets are publishable if edge was computed
-            return edge_computed is not None
+            return edge_exists is not None
 
         # Player props: check edge AND (lineup confirmed OR p_start >= threshold)
-        # Get latest projection
+        # Get latest projection and check if edge computed via sim_market_probs
         projection_row = await conn.fetchrow(
             f"""
-            SELECT projection_id, edge_computed_at
-            FROM {Table.PROJECTIONS}
-            WHERE game_id = $1
-            ORDER BY run_ts DESC
+            SELECT p.projection_id,
+                   (SELECT 1 FROM {Table.SIM_MARKET_PROBS} smp
+                    WHERE smp.projection_id = p.projection_id
+                    AND smp.edge_computed_at IS NOT NULL
+                    LIMIT 1) AS edge_exists
+            FROM {Table.PROJECTIONS} p
+            WHERE p.game_id = $1
+            ORDER BY p.run_ts DESC
             LIMIT 1
             """,
             game_id,
         )
 
-        if not projection_row or not projection_row["edge_computed_at"]:
+        if not projection_row or not projection_row["edge_exists"]:
             return False
 
         projection_id = projection_row["projection_id"]
