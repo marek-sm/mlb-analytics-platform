@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from mlb.db.models import Table
 from mlb.db.pool import close_pool, get_pool
 from mlb.ingestion.base import (
     GameLogRow,
@@ -925,6 +926,274 @@ async def test_game_final_score_persisted():
             await conn.execute(
                 "DELETE FROM games WHERE game_id IN ('test_game_fc15_final', 'test_game_fc15_scheduled')"
             )
+
+
+# FC-30: Test V1GameProvider.fetch_schedule() wires to MLB Stats API
+@pytest.mark.asyncio
+async def test_fetch_schedule_parses_mlb_api_response():
+    """
+    Test that fetch_schedule parses MLB API response correctly (FC-30).
+
+    Verifies:
+    - Calls MLB Stats API with correct parameters
+    - Parses response dates[0].games[] into GameRow objects
+    - Maps all fields correctly (game_id, teams, venue, status, scores)
+    """
+    game_provider = V1GameProvider()
+
+    # Mock MLB API response with 2 games
+    mock_response = {
+        "dates": [
+            {
+                "games": [
+                    {
+                        "gamePk": 123456,
+                        "officialDate": "2026-02-14",
+                        "gameDate": "2026-02-14T19:10:00Z",
+                        "teams": {
+                            "home": {
+                                "team": {"id": 147},
+                                "score": 5,
+                            },
+                            "away": {
+                                "team": {"id": 121},
+                                "score": 3,
+                            },
+                        },
+                        "venue": {"id": 2602},
+                        "status": {"abstractGameCode": "F"},
+                    },
+                    {
+                        "gamePk": 789012,
+                        "officialDate": "2026-02-14",
+                        "gameDate": "2026-02-14T20:05:00Z",
+                        "teams": {
+                            "home": {
+                                "team": {"id": 133},
+                                "score": None,
+                            },
+                            "away": {
+                                "team": {"id": 137},
+                                "score": None,
+                            },
+                        },
+                        "venue": {"id": 2680},
+                        "status": {"abstractGameCode": "S"},
+                    },
+                ]
+            }
+        ]
+    }
+
+    # Mock aiohttp response
+    class MockResponse:
+        async def json(self):
+            return mock_response
+
+        def raise_for_status(self):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc_val, exc_tb):
+            pass
+
+    class MockSession:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def get(self, url, params=None):
+            return MockResponse()
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc_val, exc_tb):
+            pass
+
+    with patch("aiohttp.ClientSession", MockSession):
+        rows = await game_provider.fetch_schedule(date(2026, 2, 14))
+
+    # Verify parsed games
+    assert len(rows) == 2
+
+    # Game 1: Final game with scores
+    assert rows[0].game_id == "123456"
+    assert rows[0].game_date == date(2026, 2, 14)
+    assert rows[0].home_team_id == 147
+    assert rows[0].away_team_id == 121
+    assert rows[0].park_id == 2602
+    assert rows[0].first_pitch == datetime(2026, 2, 14, 19, 10, 0, tzinfo=timezone.utc)
+    assert rows[0].status == "final"
+    assert rows[0].home_score == 5
+    assert rows[0].away_score == 3
+
+    # Game 2: Scheduled game without scores
+    assert rows[1].game_id == "789012"
+    assert rows[1].game_date == date(2026, 2, 14)
+    assert rows[1].home_team_id == 133
+    assert rows[1].away_team_id == 137
+    assert rows[1].park_id == 2680
+    assert rows[1].first_pitch == datetime(2026, 2, 14, 20, 5, 0, tzinfo=timezone.utc)
+    assert rows[1].status == "scheduled"
+    assert rows[1].home_score is None
+    assert rows[1].away_score is None
+
+
+@pytest.mark.asyncio
+async def test_fetch_schedule_api_timeout_returns_empty():
+    """
+    Test that fetch_schedule returns empty list on API timeout (FC-30).
+
+    Verifies conservative fallback: on timeout exception, log warning and return [].
+    """
+    game_provider = V1GameProvider()
+
+    # Mock aiohttp timeout
+    class MockSession:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def get(self, url, params=None):
+            raise asyncio.TimeoutError("API timeout")
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc_val, exc_tb):
+            pass
+
+    with patch("aiohttp.ClientSession", MockSession):
+        rows = await game_provider.fetch_schedule(date(2026, 2, 14))
+
+    # Should return empty list on timeout
+    assert rows == []
+
+
+@pytest.mark.asyncio
+async def test_fetch_schedule_unknown_venue_falls_back_to_home_team():
+    """
+    Test that fetch_schedule falls back to home team's park for unknown venue IDs (FC-32).
+
+    Verifies:
+    - Game with venue.id = 99999 (not in parks) resolves to home team's park
+    - Game with venue.id = 99999 AND home_team_id not in parks is skipped (no GameRow)
+    """
+    game_provider = V1GameProvider()
+
+    # Mock MLB API response with unknown venue.id and two games
+    mock_response = {
+        "dates": [
+            {
+                "games": [
+                    {
+                        "gamePk": 999001,
+                        "officialDate": "2026-02-14",
+                        "gameDate": "2026-02-14T19:10:00Z",
+                        "teams": {
+                            "home": {
+                                "team": {"id": 147},  # Has fallback in parks
+                                "score": None,
+                            },
+                            "away": {
+                                "team": {"id": 121},
+                                "score": None,
+                            },
+                        },
+                        "venue": {"id": 99999},  # Unknown venue ID
+                        "status": {"abstractGameCode": "S"},
+                    },
+                    {
+                        "gamePk": 999002,
+                        "officialDate": "2026-02-14",
+                        "gameDate": "2026-02-14T20:05:00Z",
+                        "teams": {
+                            "home": {
+                                "team": {"id": 88888},  # No fallback in parks
+                                "score": None,
+                            },
+                            "away": {
+                                "team": {"id": 121},
+                                "score": None,
+                            },
+                        },
+                        "venue": {"id": 99999},  # Unknown venue ID
+                        "status": {"abstractGameCode": "S"},
+                    },
+                ]
+            }
+        ]
+    }
+
+    # Mock aiohttp response
+    class MockResponse:
+        async def json(self):
+            return mock_response
+
+        def raise_for_status(self):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc_val, exc_tb):
+            pass
+
+    class MockSession:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def get(self, url, params=None):
+            return MockResponse()
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc_val, exc_tb):
+            pass
+
+    # Mock DB queries for valid parks and fallback map (FC-32)
+    class MockConnection:
+        async def fetch(self, query):
+            # Return valid park IDs (not including 99999)
+            if "SELECT park_id FROM" in query:
+                return [{"park_id": 2602}, {"park_id": 2680}, {"park_id": 2889}]
+            # Return team->park fallback map (team 147 has fallback, 88888 does not)
+            elif "SELECT team_id, park_id FROM" in query:
+                return [
+                    {"team_id": 147, "park_id": 2602},
+                    {"team_id": 121, "park_id": 2680},
+                    {"team_id": 133, "park_id": 2889},
+                ]
+            return []
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc_val, exc_tb):
+            pass
+
+    class MockPool:
+        def acquire(self):
+            return MockConnection()
+
+    # Mock get_pool to return our mock pool
+    async def mock_get_pool():
+        return MockPool()
+
+    with patch("aiohttp.ClientSession", MockSession), patch(
+        "mlb.ingestion.games.get_pool", mock_get_pool
+    ):
+        rows = await game_provider.fetch_schedule(date(2026, 2, 14))
+
+    # Verify: Only first game should be returned (with fallback park)
+    assert len(rows) == 1
+    assert rows[0].game_id == "999001"
+    assert rows[0].home_team_id == 147
+    assert rows[0].park_id == 2602  # Fallback park for team 147
+
+    # Game 2 should be skipped (home_team_id 88888 not in fallback map)
 
 
 if __name__ == "__main__":

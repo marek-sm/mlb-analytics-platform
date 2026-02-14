@@ -187,6 +187,10 @@ class AppConfig(BaseSettings):
         default="Subscriber",
         description="Discord role name for paid subscribers",
     )
+    mlb_stats_api_base_url: str = Field(
+        default="https://statsapi.mlb.com/api/v1",
+        description="MLB Stats API base URL",
+    )
 
     @field_validator("db_pool_max")
     @classmethod
