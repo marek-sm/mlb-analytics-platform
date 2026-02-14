@@ -13,6 +13,8 @@ async def pool():
 
     The pool is created once per test session and properly closed
     at the end to prevent connection leaks and event loop issues.
+
+    Migrations are run after creating the pool to ensure all tables exist.
     """
     # Get the pool
     pool = await get_pool()

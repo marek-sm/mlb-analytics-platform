@@ -1,16 +1,29 @@
 """Tests for database schema and migrations."""
 
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
+import pytest_asyncio
 import asyncpg
 
 from mlb.db.schema import migrate, schema_version
 
 
-@pytest.fixture(scope="function")
+def _count_migration_files():
+    """Count .sql migration files in the migrations directory."""
+    migrations_dir = Path(__file__).parent.parent / "src" / "mlb" / "db" / "schema" / "migrations"
+    return len([f for f in migrations_dir.glob("*.sql") if f.name != "README.sql"])
+
+
+@pytest_asyncio.fixture(scope="function")
 async def clean_db(pool):
-    """Clean database before each test."""
+    """
+    Clean database before each test.
+
+    Drops all tables to provide a clean slate.
+    Tests that need migrations should call migrate() explicitly.
+    """
     async with pool.acquire() as conn:
         # Drop all tables
         await conn.execute("""
@@ -24,6 +37,10 @@ async def clean_db(pool):
             DROP SCHEMA public CASCADE;
             CREATE SCHEMA public;
         """)
+    # Re-run migrations for next tests that depend on schema
+    await migrate()
+
+
 
 
 class TestMigrations:
@@ -32,25 +49,28 @@ class TestMigrations:
     @pytest.mark.asyncio
     async def test_migrate_fresh_database(self, pool, clean_db):
         """Test running migrations on a fresh database."""
+        expected_count = _count_migration_files()
         applied = await migrate()
-        assert applied == 4, "Should apply 4 migrations (001, 002, 003, and 004)"
+        assert applied == expected_count, f"Should apply {expected_count} migrations"
 
         version = await schema_version()
-        assert version == 4, "Schema version should be 4"
+        assert version == expected_count, f"Schema version should be {expected_count}"
 
     @pytest.mark.asyncio
     async def test_migrate_idempotent(self, pool, clean_db):
         """Test that re-running migrations is idempotent."""
+        expected_count = _count_migration_files()
+
         # First run
         applied1 = await migrate()
-        assert applied1 == 4
+        assert applied1 == expected_count
 
         # Second run should apply nothing
         applied2 = await migrate()
         assert applied2 == 0, "Should apply 0 migrations on second run"
 
         version = await schema_version()
-        assert version == 4
+        assert version == expected_count
 
     @pytest.mark.asyncio
     async def test_schema_version_before_migrations(self, pool, clean_db):
@@ -61,9 +81,10 @@ class TestMigrations:
     @pytest.mark.asyncio
     async def test_schema_version_after_migrations(self, pool, clean_db):
         """Test schema_version() after migrations."""
+        expected_count = _count_migration_files()
         await migrate()
         version = await schema_version()
-        assert version == 4
+        assert version == expected_count
 
 
 class TestSchema:

@@ -91,19 +91,28 @@ async def test_global_run_end_to_end(pool):
         ])
         mock_game_instance.write_games = AsyncMock()
 
-        # Mock odds provider
+        # Mock odds provider - return minimal non-empty payload to avoid retry
         mock_odds_instance = mock_odds_provider.return_value
-        mock_odds_instance.fetch_odds = AsyncMock(return_value=[])
+        mock_odds_instance.fetch_odds = AsyncMock(return_value=[
+            MagicMock(game_id=game_ids[0], book="Test", market="ml", side="home",
+                      line=None, price=1.91, snapshot_ts=datetime.now(timezone.utc))
+        ])
         mock_odds_instance.write_odds = AsyncMock()
 
-        # Mock weather provider
+        # Mock weather provider - return minimal non-empty payload to avoid retry
         mock_weather_instance = mock_weather_provider.return_value
-        mock_weather_instance.fetch_weather = AsyncMock(return_value=None)
+        mock_weather_instance.fetch_weather = AsyncMock(return_value=MagicMock(
+            game_id=game_ids[0], temp_f=72, wind_speed_mph=5, wind_dir="N",
+            precip_pct=0, fetched_at=datetime.now(timezone.utc)
+        ))
         mock_weather_instance.write_weather = AsyncMock()
 
-        # Mock lineup provider
+        # Mock lineup provider - return minimal non-empty payload to avoid retry
         mock_lineup_instance = mock_lineup_provider.return_value
-        mock_lineup_instance.fetch_lineups = AsyncMock(return_value=[])
+        mock_lineup_instance.fetch_lineups = AsyncMock(return_value=[
+            MagicMock(game_id=game_ids[0], team_id=147, player_id=101,
+                      batting_order=1, is_confirmed=False, source_ts=datetime.now(timezone.utc))
+        ])
         mock_lineup_instance.write_lineups = AsyncMock()
 
         # Mock model prediction (skip due to feature requirements)
@@ -138,22 +147,31 @@ async def test_per_game_run(pool):
             datetime.now(timezone.utc) + timedelta(hours=2),
         )
 
-    # Mock providers
+    # Mock providers - return minimal non-empty payloads to avoid retry
     with patch("mlb.scheduler.pipeline.V1OddsProvider") as mock_odds, \
          patch("mlb.scheduler.pipeline.V1WeatherProvider") as mock_weather, \
          patch("mlb.scheduler.pipeline.V1LineupProvider") as mock_lineup, \
          patch("mlb.scheduler.pipeline.predict_team_runs") as mock_predict:
 
         mock_odds_instance = mock_odds.return_value
-        mock_odds_instance.fetch_odds = AsyncMock(return_value=[])
+        mock_odds_instance.fetch_odds = AsyncMock(return_value=[
+            MagicMock(game_id=game_id, book="Test", market="ml", side="home",
+                      line=None, price=1.91, snapshot_ts=datetime.now(timezone.utc))
+        ])
         mock_odds_instance.write_odds = AsyncMock()
 
         mock_weather_instance = mock_weather.return_value
-        mock_weather_instance.fetch_weather = AsyncMock(return_value=None)
+        mock_weather_instance.fetch_weather = AsyncMock(return_value=MagicMock(
+            game_id=game_id, temp_f=72, wind_speed_mph=5, wind_dir="N",
+            precip_pct=0, fetched_at=datetime.now(timezone.utc)
+        ))
         mock_weather_instance.write_weather = AsyncMock()
 
         mock_lineup_instance = mock_lineup.return_value
-        mock_lineup_instance.fetch_lineups = AsyncMock(return_value=[])
+        mock_lineup_instance.fetch_lineups = AsyncMock(return_value=[
+            MagicMock(game_id=game_id, team_id=147, player_id=101,
+                      batting_order=1, is_confirmed=False, source_ts=datetime.now(timezone.utc))
+        ])
         mock_lineup_instance.write_lineups = AsyncMock()
 
         mock_predict.side_effect = ValueError("Missing features")
@@ -161,9 +179,9 @@ async def test_per_game_run(pool):
         # Run per-game pipeline
         await run_game(game_id)
 
-        # Assert: ingestion was called for this game only
-        assert mock_odds_instance.fetch_odds.call_count >= 1
-        assert mock_lineup_instance.fetch_lineups.call_count >= 1
+        # Assert: ingestion was called for this game only (once since we return non-empty)
+        mock_odds_instance.fetch_odds.assert_called_once()
+        mock_lineup_instance.fetch_lineups.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -187,13 +205,13 @@ async def test_lineup_gate_confirmed(pool):
             today,
         )
 
-        # Insert projection with edge computed
+        # Insert projection
         await conn.execute(
             f"""
             INSERT INTO {Table.PROJECTIONS}
             (game_id, run_ts, home_mu, away_mu, home_disp, away_disp,
-             sim_n, model_version, edge_computed_at, created_at)
-            VALUES ($1, now(), 4.5, 4.0, 2.0, 2.0, 5000, 'test', now(), now())
+             sim_n, created_at)
+            VALUES ($1, now(), 4.5, 4.0, 2.0, 2.0, 5000, now())
             """,
             game_id,
         )
@@ -203,12 +221,35 @@ async def test_lineup_gate_confirmed(pool):
             game_id,
         )
 
-        # Insert confirmed lineup
+        # Insert sim_market_probs with edge computed (edge_computed_at is on this table)
+        await conn.execute(
+            f"""
+            INSERT INTO {Table.SIM_MARKET_PROBS}
+            (projection_id, market, side, line, prob, edge_computed_at)
+            VALUES ($1, 'ml', 'home', NULL, 0.52, now())
+            ON CONFLICT (projection_id, market, side, line) DO NOTHING
+            """,
+            projection_id,
+        )
+
+        # Insert player first (FK requirement)
+        await conn.execute(
+            f"""
+            INSERT INTO {Table.PLAYERS}
+            (player_id, name, team_id)
+            VALUES ($1, 'Test Player', 147)
+            ON CONFLICT (player_id) DO NOTHING
+            """,
+            player_id,
+        )
+
+        # Insert confirmed lineup (no position or updated_at columns in lineups)
         await conn.execute(
             f"""
             INSERT INTO {Table.LINEUPS}
-            (game_id, team_id, player_id, batting_order, position, is_confirmed, updated_at)
-            VALUES ($1, 147, $2, 1, 'CF', TRUE, now())
+            (game_id, team_id, player_id, batting_order, is_confirmed, source_ts)
+            VALUES ($1, 147, $2, 1, TRUE, now())
+            ON CONFLICT (game_id, team_id, batting_order, source_ts) DO NOTHING
             """,
             game_id,
             player_id,
@@ -218,11 +259,12 @@ async def test_lineup_gate_confirmed(pool):
         await conn.execute(
             f"""
             INSERT INTO {Table.PLAYER_PROJECTIONS}
-            (projection_id, player_id, stat, line, prob_over, p_start, created_at)
-            VALUES ($1, $2, 'H', 1.5, 0.55, 0.75, now())
+            (projection_id, player_id, game_id, stat, line, prob_over, p_start, created_at)
+            VALUES ($1, $2, $3, 'H', 1.5, 0.55, 0.75, now())
             """,
             projection_id,
             player_id,
+            game_id,
         )
 
     # Test team market (should pass)
@@ -259,8 +301,8 @@ async def test_lineup_gate_high_p_start(pool):
             f"""
             INSERT INTO {Table.PROJECTIONS}
             (game_id, run_ts, home_mu, away_mu, home_disp, away_disp,
-             sim_n, model_version, edge_computed_at, created_at)
-            VALUES ($1, now(), 4.5, 4.0, 2.0, 2.0, 5000, 'test', now(), now())
+             sim_n, created_at)
+            VALUES ($1, now(), 4.5, 4.0, 2.0, 2.0, 5000, now())
             """,
             game_id,
         )
@@ -270,14 +312,40 @@ async def test_lineup_gate_high_p_start(pool):
             game_id,
         )
 
-        # Insert unconfirmed lineups
+        # Insert sim_market_probs with edge computed
+        await conn.execute(
+            f"""
+            INSERT INTO {Table.SIM_MARKET_PROBS}
+            (projection_id, market, side, line, prob, edge_computed_at)
+            VALUES ($1, 'ml', 'home', NULL, 0.52, now())
+            ON CONFLICT (projection_id, market, side, line) DO NOTHING
+            """,
+            projection_id,
+        )
+
+        # Insert players first (FK requirement)
+        await conn.execute(
+            f"""
+            INSERT INTO {Table.PLAYERS}
+            (player_id, name, team_id)
+            VALUES
+            ($1, 'Test Player High', 147),
+            ($2, 'Test Player Low', 147)
+            ON CONFLICT (player_id) DO NOTHING
+            """,
+            player_id_high,
+            player_id_low,
+        )
+
+        # Insert unconfirmed lineups (no position or updated_at columns)
         await conn.execute(
             f"""
             INSERT INTO {Table.LINEUPS}
-            (game_id, team_id, player_id, batting_order, position, is_confirmed, updated_at)
+            (game_id, team_id, player_id, batting_order, is_confirmed, source_ts)
             VALUES
-            ($1, 147, $2, 1, 'CF', FALSE, now()),
-            ($1, 147, $3, 2, 'SS', FALSE, now())
+            ($1, 147, $2, 1, FALSE, now()),
+            ($1, 147, $3, 2, FALSE, now())
+            ON CONFLICT (game_id, team_id, batting_order, source_ts) DO NOTHING
             """,
             game_id,
             player_id_high,
@@ -288,13 +356,14 @@ async def test_lineup_gate_high_p_start(pool):
         await conn.execute(
             f"""
             INSERT INTO {Table.PLAYER_PROJECTIONS}
-            (projection_id, player_id, stat, line, prob_over, p_start, created_at)
+            (projection_id, player_id, game_id, stat, line, prob_over, p_start, created_at)
             VALUES
-            ($1, $2, 'H', 1.5, 0.55, 0.90, now()),
-            ($1, $3, 'H', 1.5, 0.50, 0.60, now())
+            ($1, $2, $3, 'H', 1.5, 0.55, 0.90, now()),
+            ($1, $4, $3, 'H', 1.5, 0.50, 0.60, now())
             """,
             projection_id,
             player_id_high,
+            game_id,
             player_id_low,
         )
 
@@ -325,15 +394,34 @@ async def test_lineup_gate_team_markets_exempt(pool):
             today,
         )
 
-        # Insert projection with edge computed, no confirmed lineups
+        # Insert projection, no confirmed lineups
         await conn.execute(
             f"""
             INSERT INTO {Table.PROJECTIONS}
             (game_id, run_ts, home_mu, away_mu, home_disp, away_disp,
-             sim_n, model_version, edge_computed_at, created_at)
-            VALUES ($1, now(), 4.5, 4.0, 2.0, 2.0, 5000, 'test', now(), now())
+             sim_n, created_at)
+            VALUES ($1, now(), 4.5, 4.0, 2.0, 2.0, 5000, now())
             """,
             game_id,
+        )
+
+        projection_id = await conn.fetchval(
+            f"SELECT projection_id FROM {Table.PROJECTIONS} WHERE game_id = $1",
+            game_id,
+        )
+
+        # Insert sim_market_probs with edge computed (this is what makes team markets publishable)
+        await conn.execute(
+            f"""
+            INSERT INTO {Table.SIM_MARKET_PROBS}
+            (projection_id, market, side, line, prob, edge_computed_at)
+            VALUES
+            ($1, 'ml', 'home', NULL, 0.52, now()),
+            ($1, 'rl', 'home', -1.5, 0.48, now()),
+            ($1, 'total', 'over', 8.5, 0.51, now())
+            ON CONFLICT (projection_id, market, side, line) DO NOTHING
+            """,
+            projection_id,
         )
 
     # Team markets should pass even without confirmed lineups
@@ -362,14 +450,27 @@ async def test_rerun_throttle(pool):
             today,
         )
 
-        # Insert confirmed lineups to trigger events
+        # Insert players first (FK requirement)
+        await conn.execute(
+            f"""
+            INSERT INTO {Table.PLAYERS}
+            (player_id, name, team_id)
+            VALUES
+            (101, 'Test Player 101', 147),
+            (201, 'Test Player 201', 139)
+            ON CONFLICT (player_id) DO NOTHING
+            """
+        )
+
+        # Insert confirmed lineups to trigger events (no position or updated_at columns)
         await conn.execute(
             f"""
             INSERT INTO {Table.LINEUPS}
-            (game_id, team_id, player_id, batting_order, position, is_confirmed, updated_at)
+            (game_id, team_id, player_id, batting_order, is_confirmed, source_ts)
             VALUES
-            ($1, 147, 101, 1, 'CF', TRUE, now()),
-            ($1, 139, 201, 1, 'SS', TRUE, now())
+            ($1, 147, 101, 1, TRUE, now()),
+            ($1, 139, 201, 1, TRUE, now())
+            ON CONFLICT (game_id, team_id, batting_order, source_ts) DO NOTHING
             """,
             game_id,
         )
@@ -442,8 +543,8 @@ async def test_nightly_eval(pool):
             f"""
             INSERT INTO {Table.PROJECTIONS}
             (game_id, run_ts, home_mu, away_mu, home_disp, away_disp,
-             sim_n, model_version, created_at)
-            VALUES ($1, now(), 4.5, 4.0, 2.0, 2.0, 5000, 'test', now())
+             sim_n, created_at)
+            VALUES ($1, now(), 4.5, 4.0, 2.0, 2.0, 5000, now())
             """,
             game_id,
         )
@@ -457,8 +558,8 @@ async def test_nightly_eval(pool):
         await conn.execute(
             f"""
             INSERT INTO {Table.SIM_MARKET_PROBS}
-            (projection_id, market, side, line, prob, created_at)
-            VALUES ($1, 'ml', 'home', NULL, 0.55, now())
+            (projection_id, market, side, line, prob)
+            VALUES ($1, 'ml', 'home', NULL, 0.55)
             """,
             projection_id,
         )
@@ -505,13 +606,15 @@ async def test_no_games_today(pool):
     """Edge case: No games scheduled for today."""
     with patch("mlb.scheduler.pipeline.V1GameProvider") as mock_provider:
         mock_instance = mock_provider.return_value
+        # Empty list triggers retry (3 times) per D-019
         mock_instance.fetch_schedule = AsyncMock(return_value=[])
         mock_instance.write_games = AsyncMock()
 
         # Should complete without error
         await run_global("morning")
 
-        mock_instance.fetch_schedule.assert_called_once()
+        # Empty result triggers 3 retries
+        assert mock_instance.fetch_schedule.call_count == 3
         mock_instance.write_games.assert_not_called()
 
 
