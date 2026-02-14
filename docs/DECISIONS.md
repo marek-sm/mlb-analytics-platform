@@ -1,6 +1,26 @@
 # Architecture Decision Records
 
-This document tracks key architectural and implementation decisions made throughout the project.
+This document tracks all architectural and implementation decisions made throughout the MLB Analytics Platform project. Decisions are numbered D-001 through D-054 and organized by implementation unit.
+
+---
+
+## Table of Contents
+
+- [Unit 1: Repository Skeleton & Configuration](#unit-1-repository-skeleton--configuration) (D-001 to D-004)
+- [Unit 2: Database Schema & Migrations](#unit-2-database-schema--migrations) (D-005 to D-016)
+- [Unit 3: Data Ingestion](#unit-3-data-ingestion--provider-agnostic-interfaces) (D-017 to D-020)
+- [Unit 4: Team Run-Scoring Models](#unit-4-team-run-scoring-models) (D-021 to D-026)
+- [Unit 5: Player Prop Models](#unit-5-player-prop-models) (D-027 to D-031)
+- [Unit 6: Monte Carlo Simulation Engine](#unit-6-monte-carlo-simulation-engine) (D-032 to D-035)
+- [Unit 7: Odds Processing, Edge Calculation & Bankroll Sizing](#unit-7-odds-processing-edge-calculation--bankroll-sizing) (D-036 to D-039)
+- [Unit 8: Evaluation & Backtesting Harness](#unit-8-evaluation--backtesting-harness) (D-040 to D-042)
+- [Unit 9: Scheduler & Orchestration Pipeline](#unit-9-scheduler--orchestration-pipeline) (D-043 to D-046)
+- [Unit 10: Discord Bot & Publishing Layer](#unit-10-discord-bot--publishing-layer) (D-047 to D-050)
+- [Unit 11: Stripe Subscription & Webhook Integration](#unit-11-stripe-subscription--webhook-integration) (D-051 to D-054)
+
+**Total Decisions:** 54
+
+---
 
 ## Unit 1: Repository Skeleton & Configuration
 
