@@ -46,7 +46,7 @@ async def test_global_run_end_to_end(pool):
                 INSERT INTO {Table.GAMES}
                 (game_id, game_date, home_team_id, away_team_id, park_id,
                  first_pitch, status, updated_at)
-                VALUES ($1, $2, 1, 2, 1, $3, 'scheduled', now())
+                VALUES ($1, $2, 147, 139, 3313, $3, 'scheduled', now())
                 """,
                 game_id,
                 today,
@@ -69,9 +69,9 @@ async def test_global_run_end_to_end(pool):
             MagicMock(
                 game_id=game_ids[0],
                 game_date=today,
-                home_team_id=1,
-                away_team_id=2,
-                park_id=1,
+                home_team_id=147,
+                away_team_id=139,
+                park_id=3313,
                 first_pitch=datetime.now(timezone.utc) + timedelta(hours=3),
                 status="scheduled",
                 home_score=None,
@@ -80,8 +80,8 @@ async def test_global_run_end_to_end(pool):
             MagicMock(
                 game_id=game_ids[1],
                 game_date=today,
-                home_team_id=3,
-                away_team_id=4,
+                home_team_id=110,
+                away_team_id=111,
                 park_id=2,
                 first_pitch=datetime.now(timezone.utc) + timedelta(hours=4),
                 status="scheduled",
@@ -130,7 +130,7 @@ async def test_per_game_run(pool):
             INSERT INTO {Table.GAMES}
             (game_id, game_date, home_team_id, away_team_id, park_id,
              first_pitch, status, updated_at)
-            VALUES ($1, $2, 1, 2, 1, $3, 'scheduled', now())
+            VALUES ($1, $2, 147, 139, 3313, $3, 'scheduled', now())
             """,
             game_id,
             today,
@@ -179,7 +179,7 @@ async def test_lineup_gate_confirmed(pool):
             INSERT INTO {Table.GAMES}
             (game_id, game_date, home_team_id, away_team_id, park_id,
              first_pitch, status, updated_at)
-            VALUES ($1, $2, 1, 2, 1, now(), 'scheduled', now())
+            VALUES ($1, $2, 147, 139, 3313, now(), 'scheduled', now())
             """,
             game_id,
             today,
@@ -206,7 +206,7 @@ async def test_lineup_gate_confirmed(pool):
             f"""
             INSERT INTO {Table.LINEUPS}
             (game_id, team_id, player_id, batting_order, position, is_confirmed, updated_at)
-            VALUES ($1, 1, $2, 1, 'CF', TRUE, now())
+            VALUES ($1, 147, $2, 1, 'CF', TRUE, now())
             """,
             game_id,
             player_id,
@@ -245,7 +245,7 @@ async def test_lineup_gate_high_p_start(pool):
             INSERT INTO {Table.GAMES}
             (game_id, game_date, home_team_id, away_team_id, park_id,
              first_pitch, status, updated_at)
-            VALUES ($1, $2, 1, 2, 1, now(), 'scheduled', now())
+            VALUES ($1, $2, 147, 139, 3313, now(), 'scheduled', now())
             """,
             game_id,
             today,
@@ -273,8 +273,8 @@ async def test_lineup_gate_high_p_start(pool):
             INSERT INTO {Table.LINEUPS}
             (game_id, team_id, player_id, batting_order, position, is_confirmed, updated_at)
             VALUES
-            ($1, 1, $2, 1, 'CF', FALSE, now()),
-            ($1, 1, $3, 2, 'SS', FALSE, now())
+            ($1, 147, $2, 1, 'CF', FALSE, now()),
+            ($1, 147, $3, 2, 'SS', FALSE, now())
             """,
             game_id,
             player_id_high,
@@ -315,7 +315,7 @@ async def test_lineup_gate_team_markets_exempt(pool):
             INSERT INTO {Table.GAMES}
             (game_id, game_date, home_team_id, away_team_id, park_id,
              first_pitch, status, updated_at)
-            VALUES ($1, $2, 1, 2, 1, now(), 'scheduled', now())
+            VALUES ($1, $2, 147, 139, 3313, now(), 'scheduled', now())
             """,
             game_id,
             today,
@@ -351,7 +351,7 @@ async def test_rerun_throttle(pool):
             INSERT INTO {Table.GAMES}
             (game_id, game_date, home_team_id, away_team_id, park_id,
              first_pitch, status, updated_at)
-            VALUES ($1, $2, 1, 2, 1, now(), 'scheduled', now())
+            VALUES ($1, $2, 147, 139, 3313, now(), 'scheduled', now())
             """,
             game_id,
             today,
@@ -363,8 +363,8 @@ async def test_rerun_throttle(pool):
             INSERT INTO {Table.LINEUPS}
             (game_id, team_id, player_id, batting_order, position, is_confirmed, updated_at)
             VALUES
-            ($1, 1, 101, 1, 'CF', TRUE, now()),
-            ($1, 2, 201, 1, 'SS', TRUE, now())
+            ($1, 147, 101, 1, 'CF', TRUE, now()),
+            ($1, 139, 201, 1, 'SS', TRUE, now())
             """,
             game_id,
         )
@@ -425,7 +425,7 @@ async def test_nightly_eval(pool):
             INSERT INTO {Table.GAMES}
             (game_id, game_date, home_team_id, away_team_id, park_id,
              first_pitch, status, home_score, away_score, updated_at)
-            VALUES ($1, $2, 1, 2, 1, now(), 'final', 5, 3, now())
+            VALUES ($1, $2, 147, 139, 3313, now(), 'final', 5, 3, now())
             """,
             game_id,
             today,
@@ -521,7 +521,7 @@ async def test_postponed_game_skipped(pool):
             INSERT INTO {Table.GAMES}
             (game_id, game_date, home_team_id, away_team_id, park_id,
              first_pitch, status, updated_at)
-            VALUES ($1, $2, 1, 2, 1, NULL, 'postponed', now())
+            VALUES ($1, $2, 147, 139, 3313, NULL, 'postponed', now())
             """,
             game_id,
             today,
