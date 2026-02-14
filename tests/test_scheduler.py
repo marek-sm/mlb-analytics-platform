@@ -61,7 +61,6 @@ async def test_global_run_end_to_end(pool):
          patch("mlb.scheduler.pipeline.V1LineupProvider") as mock_lineup_provider, \
          patch("mlb.scheduler.pipeline.predict_team_runs") as mock_predict, \
          patch("mlb.scheduler.pipeline.simulate_game") as mock_simulate, \
-         patch("mlb.scheduler.pipeline.save_projection") as mock_save, \
          patch("mlb.scheduler.pipeline.compute_edges") as mock_edges:
 
         # Mock game provider
