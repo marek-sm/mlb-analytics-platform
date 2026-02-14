@@ -47,6 +47,7 @@ async def test_global_run_end_to_end(pool):
                 (game_id, game_date, home_team_id, away_team_id, park_id,
                  first_pitch, status, updated_at)
                 VALUES ($1, $2, 147, 139, 3313, $3, 'scheduled', now())
+                ON CONFLICT (game_id) DO NOTHING
                 """,
                 game_id,
                 today,
@@ -131,6 +132,7 @@ async def test_per_game_run(pool):
             (game_id, game_date, home_team_id, away_team_id, park_id,
              first_pitch, status, updated_at)
             VALUES ($1, $2, 147, 139, 3313, $3, 'scheduled', now())
+            ON CONFLICT (game_id) DO NOTHING
             """,
             game_id,
             today,
@@ -180,6 +182,7 @@ async def test_lineup_gate_confirmed(pool):
             (game_id, game_date, home_team_id, away_team_id, park_id,
              first_pitch, status, updated_at)
             VALUES ($1, $2, 147, 139, 3313, now(), 'scheduled', now())
+            ON CONFLICT (game_id) DO NOTHING
             """,
             game_id,
             today,
@@ -246,6 +249,7 @@ async def test_lineup_gate_high_p_start(pool):
             (game_id, game_date, home_team_id, away_team_id, park_id,
              first_pitch, status, updated_at)
             VALUES ($1, $2, 147, 139, 3313, now(), 'scheduled', now())
+            ON CONFLICT (game_id) DO NOTHING
             """,
             game_id,
             today,
@@ -316,6 +320,7 @@ async def test_lineup_gate_team_markets_exempt(pool):
             (game_id, game_date, home_team_id, away_team_id, park_id,
              first_pitch, status, updated_at)
             VALUES ($1, $2, 147, 139, 3313, now(), 'scheduled', now())
+            ON CONFLICT (game_id) DO NOTHING
             """,
             game_id,
             today,
@@ -352,6 +357,7 @@ async def test_rerun_throttle(pool):
             (game_id, game_date, home_team_id, away_team_id, park_id,
              first_pitch, status, updated_at)
             VALUES ($1, $2, 147, 139, 3313, now(), 'scheduled', now())
+            ON CONFLICT (game_id) DO NOTHING
             """,
             game_id,
             today,
@@ -426,6 +432,7 @@ async def test_nightly_eval(pool):
             (game_id, game_date, home_team_id, away_team_id, park_id,
              first_pitch, status, home_score, away_score, updated_at)
             VALUES ($1, $2, 147, 139, 3313, now(), 'final', 5, 3, now())
+            ON CONFLICT (game_id) DO NOTHING
             """,
             game_id,
             today,
@@ -522,6 +529,7 @@ async def test_postponed_game_skipped(pool):
             (game_id, game_date, home_team_id, away_team_id, park_id,
              first_pitch, status, updated_at)
             VALUES ($1, $2, 147, 139, 3313, NULL, 'postponed', now())
+            ON CONFLICT (game_id) DO NOTHING
             """,
             game_id,
             today,
