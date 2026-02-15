@@ -191,6 +191,14 @@ class AppConfig(BaseSettings):
         default="https://statsapi.mlb.com/api/v1",
         description="MLB Stats API base URL",
     )
+    odds_api_key: str = Field(
+        default="",
+        description="The Odds API key",
+    )
+    odds_api_base_url: str = Field(
+        default="https://api.the-odds-api.com/v4",
+        description="The Odds API base URL",
+    )
 
     @field_validator("db_pool_max")
     @classmethod

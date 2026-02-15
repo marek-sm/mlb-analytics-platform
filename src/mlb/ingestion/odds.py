@@ -1,14 +1,18 @@
 """Concrete odds provider with American → European decimal conversion."""
 
+import asyncio
+import json
 import logging
 from datetime import datetime, timezone
 
+import aiohttp
 import asyncpg
 
 from mlb.config import get_config
 from mlb.db.models import Table
 from mlb.db.pool import get_pool
 from mlb.ingestion.base import OddsProvider, OddsRow
+from mlb.ingestion.cache import get_cache
 
 logger = logging.getLogger(__name__)
 
@@ -103,20 +107,210 @@ class V1OddsProvider(OddsProvider):
             List of OddsRow objects with price in European decimal (≥ 1.0)
         """
         try:
-            # Stub: In production, this would call an external API
-            # For now, return empty list (no odds available)
-            logger.info(f"Fetching odds for game {game_id}")
+            config = get_config()
+            cache = get_cache()
 
-            # Simulate API call that returns no data in v1
-            rows = []
+            # Check cache first (TTL = 300 seconds = 5 minutes)
+            cache_key = f"odds_api_mlb"
+            cached_response = cache.get(cache_key)
 
-            # If we had real data, we would:
-            # 1. Parse provider response
-            # 2. Detect/convert odds format using detect_and_convert_odds()
-            # 3. Build OddsRow objects
-            # 4. Write to database using _write_odds()
+            if cached_response is not None:
+                logger.info("Using cached odds API response")
+                response_data = json.loads(cached_response.decode("utf-8"))
+            else:
+                # Make API call
+                if not config.odds_api_key:
+                    logger.warning("odds_api_key not configured, returning empty odds")
+                    return []
 
-            return rows
+                url = f"{config.odds_api_base_url}/sports/baseball_mlb/odds"
+                params = {
+                    "apiKey": config.odds_api_key,
+                    "regions": "us",
+                    "markets": "h2h,spreads,totals",
+                    "oddsFormat": "american",
+                    "dateFormat": "iso",
+                }
+
+                try:
+                    timeout = aiohttp.ClientTimeout(total=10)
+                    async with aiohttp.ClientSession(timeout=timeout) as session:
+                        async with session.get(url, params=params) as resp:
+                            if resp.status != 200:
+                                logger.warning(
+                                    f"Odds API returned status {resp.status}, returning empty"
+                                )
+                                return []
+
+                            response_text = await resp.text()
+                            response_data = json.loads(response_text)
+
+                            # Cache the response for 5 minutes
+                            cache.set(cache_key, response_text.encode("utf-8"), ttl_seconds=300)
+                            logger.info("Fetched and cached odds from API")
+
+                except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                    logger.warning(f"Odds API request failed: {e}", exc_info=True)
+                    return []
+
+            # Build team name → team_id lookup and query games
+            pool = await get_pool()
+            async with pool.acquire() as conn:
+                team_rows = await conn.fetch(
+                    f"SELECT team_id, name FROM {Table.TEAMS}"
+                )
+
+                team_name_to_id = {row["name"]: row["team_id"] for row in team_rows}
+
+                # Parse events and build OddsRow objects
+                all_odds_rows = []
+
+                for event in response_data:
+                    home_team_name = event.get("home_team")
+                    away_team_name = event.get("away_team")
+                    commence_time_str = event.get("commence_time")
+
+                    if not home_team_name or not commence_time_str:
+                        continue
+
+                    # Find home_team_id
+                    home_team_id = team_name_to_id.get(home_team_name)
+                    if home_team_id is None:
+                        logger.debug(f"Unknown home team: {home_team_name}")
+                        continue
+
+                    # Parse commence_time to get game_date
+                    commence_time = datetime.fromisoformat(commence_time_str.replace("Z", "+00:00"))
+                    game_date = commence_time.date()
+
+                    # Find matching game_id
+                    game_rows = await conn.fetch(
+                        f"""
+                        SELECT game_id, first_pitch
+                        FROM {Table.GAMES}
+                        WHERE home_team_id = $1 AND game_date = $2
+                        """,
+                        home_team_id,
+                        game_date,
+                    )
+
+                    if not game_rows:
+                        logger.debug(
+                            f"No game found for home_team_id={home_team_id}, game_date={game_date}"
+                        )
+                        continue
+
+                    # For doubleheaders, pick closest first_pitch to commence_time
+                    if len(game_rows) == 1:
+                        event_game_id = game_rows[0]["game_id"]
+                    else:
+                        # Multiple games (doubleheader) - pick closest by first_pitch
+                        closest_game = min(
+                            game_rows,
+                            key=lambda g: abs(
+                                (g["first_pitch"] - commence_time).total_seconds()
+                            )
+                            if g["first_pitch"]
+                            else float("inf"),
+                        )
+                        event_game_id = closest_game["game_id"]
+
+                    # Parse bookmakers
+                    bookmakers = event.get("bookmakers", [])
+                    for bookmaker in bookmakers:
+                        book_key = bookmaker.get("key")
+                        markets = bookmaker.get("markets", [])
+
+                        for market in markets:
+                            market_key = market.get("key")
+                            last_update_str = market.get("last_update")
+
+                            # Map market key to canonical format
+                            market_mapping = {
+                                "h2h": "ml",
+                                "spreads": "rl",
+                                "totals": "total",
+                            }
+                            canonical_market = market_mapping.get(market_key)
+                            if canonical_market is None:
+                                # Skip unknown market
+                                continue
+
+                            # Parse snapshot_ts
+                            if last_update_str:
+                                snapshot_ts = datetime.fromisoformat(
+                                    last_update_str.replace("Z", "+00:00")
+                                )
+                            else:
+                                snapshot_ts = datetime.now(timezone.utc)
+
+                            # Parse outcomes
+                            outcomes = market.get("outcomes", [])
+                            for outcome in outcomes:
+                                outcome_name = outcome.get("name")
+                                price_american = outcome.get("price")
+                                point = outcome.get("point")
+
+                                if price_american is None:
+                                    continue
+
+                                # Determine side
+                                if canonical_market == "ml":
+                                    if outcome_name == home_team_name:
+                                        side = "home"
+                                    elif outcome_name == away_team_name:
+                                        side = "away"
+                                    else:
+                                        continue
+                                    line = None
+                                elif canonical_market == "rl":
+                                    if outcome_name == home_team_name:
+                                        side = "home"
+                                    elif outcome_name == away_team_name:
+                                        side = "away"
+                                    else:
+                                        continue
+                                    line = float(point) if point is not None else None
+                                elif canonical_market == "total":
+                                    if outcome_name == "Over":
+                                        side = "over"
+                                    elif outcome_name == "Under":
+                                        side = "under"
+                                    else:
+                                        continue
+                                    line = float(point) if point is not None else None
+                                else:
+                                    continue
+
+                                # Convert price to decimal
+                                try:
+                                    price_decimal = american_to_decimal(float(price_american))
+                                    if price_decimal < 1.0:
+                                        logger.warning(
+                                            f"Invalid decimal price {price_decimal} < 1.0, skipping"
+                                        )
+                                        continue
+                                except (ValueError, ZeroDivisionError) as e:
+                                    logger.warning(f"Failed to convert odds {price_american}: {e}")
+                                    continue
+
+                                # Create OddsRow
+                                odds_row = OddsRow(
+                                    game_id=event_game_id,
+                                    book=book_key,
+                                    market=canonical_market,
+                                    side=side,
+                                    line=line,
+                                    price=price_decimal,
+                                    snapshot_ts=snapshot_ts,
+                                )
+                                all_odds_rows.append(odds_row)
+
+            # Filter to only the requested game_id
+            filtered_rows = [row for row in all_odds_rows if row.game_id == game_id]
+
+            logger.info(f"Fetched {len(filtered_rows)} odds rows for game {game_id}")
+            return filtered_rows
 
         except Exception as e:
             # Conservative fallback: log and return empty

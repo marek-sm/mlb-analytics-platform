@@ -1196,5 +1196,599 @@ async def test_fetch_schedule_unknown_venue_falls_back_to_home_team():
     # Game 2 should be skipped (home_team_id 88888 not in fallback map)
 
 
+# FC-31: Test V1OddsProvider.fetch_odds() wires to The Odds API
+@pytest.mark.asyncio
+async def test_fetch_odds_parses_odds_api_response():
+    """
+    Test that fetch_odds parses The Odds API response correctly (FC-31).
+
+    Verifies:
+    - Calls The Odds API with correct parameters
+    - Parses response events[] into OddsRow objects
+    - Maps markets (h2h→ml, spreads→rl, totals→total)
+    - Converts American odds to decimal
+    - Filters to only requested game_id
+    """
+    odds_provider = V1OddsProvider()
+
+    # Mock The Odds API response
+    mock_response = [
+        {
+            "id": "abc123",
+            "sport_key": "baseball_mlb",
+            "commence_time": "2026-02-15T00:10:00Z",
+            "home_team": "New York Yankees",
+            "away_team": "Boston Red Sox",
+            "bookmakers": [
+                {
+                    "key": "draftkings",
+                    "title": "DraftKings",
+                    "markets": [
+                        {
+                            "key": "h2h",
+                            "last_update": "2026-02-14T20:00:00Z",
+                            "outcomes": [
+                                {
+                                    "name": "New York Yankees",
+                                    "price": -150,
+                                },
+                                {
+                                    "name": "Boston Red Sox",
+                                    "price": 130,
+                                },
+                            ],
+                        },
+                        {
+                            "key": "spreads",
+                            "last_update": "2026-02-14T20:00:00Z",
+                            "outcomes": [
+                                {
+                                    "name": "New York Yankees",
+                                    "price": -110,
+                                    "point": -1.5,
+                                },
+                                {
+                                    "name": "Boston Red Sox",
+                                    "price": -110,
+                                    "point": 1.5,
+                                },
+                            ],
+                        },
+                        {
+                            "key": "totals",
+                            "last_update": "2026-02-14T20:00:00Z",
+                            "outcomes": [
+                                {
+                                    "name": "Over",
+                                    "price": -115,
+                                    "point": 8.5,
+                                },
+                                {
+                                    "name": "Under",
+                                    "price": -105,
+                                    "point": 8.5,
+                                },
+                            ],
+                        },
+                    ],
+                },
+            ],
+        },
+    ]
+
+    # Mock aiohttp response
+    class MockResponse:
+        status = 200
+
+        async def text(self):
+            import json
+
+            return json.dumps(mock_response)
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc_val, exc_tb):
+            pass
+
+    class MockSession:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def get(self, url, params=None):
+            return MockResponse()
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc_val, exc_tb):
+            pass
+
+    # Mock database queries
+    class MockConnection:
+        async def fetch(self, query, *args):
+            # Return team name→id mapping
+            if "team_id" in query and "name" in query and "teams" in query.lower():
+                return [
+                    {"team_id": 147, "name": "New York Yankees"},
+                    {"team_id": 111, "name": "Boston Red Sox"},
+                ]
+            # Return matching game_id
+            elif "game_id" in query and "first_pitch" in query and "games" in query.lower():
+                return [
+                    {
+                        "game_id": "test_game_odds_1",
+                        "first_pitch": datetime(2026, 2, 15, 0, 10, 0, tzinfo=timezone.utc),
+                    }
+                ]
+            return []
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc_val, exc_tb):
+            pass
+
+    class MockPool:
+        def acquire(self):
+            return MockConnection()
+
+    async def mock_get_pool():
+        return MockPool()
+
+    # Clear cache to ensure fresh fetch
+    cache = get_cache()
+    cache.clear()
+
+    # Mock config with fake API key
+    class MockConfig:
+        odds_api_key = "test_api_key"
+        odds_api_base_url = "https://api.the-odds-api.com/v4"
+
+    with patch("aiohttp.ClientSession", MockSession), patch(
+        "mlb.ingestion.odds.get_pool", mock_get_pool
+    ), patch("mlb.ingestion.odds.get_config", return_value=MockConfig()):
+        rows = await odds_provider.fetch_odds("test_game_odds_1")
+
+    # Verify parsed odds
+    assert len(rows) == 6  # 2 h2h + 2 spreads + 2 totals
+
+    # Find specific odds rows
+    home_ml = next((r for r in rows if r.market == "ml" and r.side == "home"), None)
+    away_ml = next((r for r in rows if r.market == "ml" and r.side == "away"), None)
+    home_rl = next((r for r in rows if r.market == "rl" and r.side == "home"), None)
+    away_rl = next((r for r in rows if r.market == "rl" and r.side == "away"), None)
+    over_total = next((r for r in rows if r.market == "total" and r.side == "over"), None)
+    under_total = next((r for r in rows if r.market == "total" and r.side == "under"), None)
+
+    # Verify home moneyline
+    assert home_ml is not None
+    assert home_ml.game_id == "test_game_odds_1"
+    assert home_ml.book == "draftkings"
+    assert home_ml.price == pytest.approx(1.667, rel=1e-3)  # -150 → 1.667
+    assert home_ml.line is None
+
+    # Verify away moneyline
+    assert away_ml is not None
+    assert away_ml.price == pytest.approx(2.3, rel=1e-3)  # +130 → 2.30
+
+    # Verify home run line
+    assert home_rl is not None
+    assert home_rl.line == -1.5
+    assert home_rl.price == pytest.approx(1.909, rel=1e-3)  # -110 → 1.909
+
+    # Verify away run line
+    assert away_rl is not None
+    assert away_rl.line == 1.5
+    assert away_rl.price == pytest.approx(1.909, rel=1e-3)  # -110 → 1.909
+
+    # Verify over
+    assert over_total is not None
+    assert over_total.line == 8.5
+    assert over_total.price == pytest.approx(1.870, rel=1e-3)  # -115 → 1.870
+
+    # Verify under
+    assert under_total is not None
+    assert under_total.line == 8.5
+    assert under_total.price == pytest.approx(1.952, rel=1e-3)  # -105 → 1.952
+
+
+@pytest.mark.asyncio
+async def test_fetch_odds_american_to_decimal_correctness():
+    """
+    Test that fetch_odds converts American odds to decimal correctly (FC-31).
+
+    Verifies the american_to_decimal function is used properly and
+    all prices are >= 1.0 (European decimal format).
+    """
+    odds_provider = V1OddsProvider()
+
+    # Mock response with various American odds values
+    mock_response = [
+        {
+            "id": "test123",
+            "commence_time": "2026-02-15T00:10:00Z",
+            "home_team": "New York Yankees",
+            "away_team": "Boston Red Sox",
+            "bookmakers": [
+                {
+                    "key": "fanduel",
+                    "markets": [
+                        {
+                            "key": "h2h",
+                            "last_update": "2026-02-14T20:00:00Z",
+                            "outcomes": [
+                                {"name": "New York Yankees", "price": 100},  # Even odds
+                                {"name": "Boston Red Sox", "price": -200},  # Heavy favorite
+                            ],
+                        },
+                    ],
+                },
+            ],
+        },
+    ]
+
+    class MockResponse:
+        status = 200
+
+        async def text(self):
+            import json
+
+            return json.dumps(mock_response)
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc_val, exc_tb):
+            pass
+
+    class MockSession:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def get(self, url, params=None):
+            return MockResponse()
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc_val, exc_tb):
+            pass
+
+    class MockConnection:
+        async def fetch(self, query, *args):
+            if "team_id" in query and "name" in query and "teams" in query.lower():
+                return [
+                    {"team_id": 147, "name": "New York Yankees"},
+                    {"team_id": 111, "name": "Boston Red Sox"},
+                ]
+            elif "game_id" in query and "first_pitch" in query and "games" in query.lower():
+                return [{"game_id": "test_game_odds_2", "first_pitch": datetime(2026, 2, 15, 0, 10, 0, tzinfo=timezone.utc)}]
+            return []
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc_val, exc_tb):
+            pass
+
+    class MockPool:
+        def acquire(self):
+            return MockConnection()
+
+    async def mock_get_pool():
+        return MockPool()
+
+    cache = get_cache()
+    cache.clear()
+
+    class MockConfig:
+        odds_api_key = "test_api_key"
+        odds_api_base_url = "https://api.the-odds-api.com/v4"
+
+    with patch("aiohttp.ClientSession", MockSession), patch(
+        "mlb.ingestion.odds.get_pool", mock_get_pool
+    ), patch("mlb.ingestion.odds.get_config", return_value=MockConfig()):
+        rows = await odds_provider.fetch_odds("test_game_odds_2")
+
+    # Verify all prices are >= 1.0
+    assert len(rows) == 2
+    for row in rows:
+        assert row.price >= 1.0
+
+    # Verify specific conversions
+    home_odds = next((r for r in rows if r.side == "home"), None)
+    away_odds = next((r for r in rows if r.side == "away"), None)
+
+    assert home_odds.price == pytest.approx(2.0, rel=1e-3)  # +100 → 2.0
+    assert away_odds.price == pytest.approx(1.5, rel=1e-3)  # -200 → 1.5
+
+
+@pytest.mark.asyncio
+async def test_fetch_odds_skips_unknown_market():
+    """
+    Test that fetch_odds skips unknown market types (FC-31).
+
+    Verifies only h2h, spreads, totals are parsed. Other markets are ignored.
+    """
+    odds_provider = V1OddsProvider()
+
+    # Mock response with unknown market
+    mock_response = [
+        {
+            "id": "test456",
+            "commence_time": "2026-02-15T00:10:00Z",
+            "home_team": "New York Yankees",
+            "away_team": "Boston Red Sox",
+            "bookmakers": [
+                {
+                    "key": "betmgm",
+                    "markets": [
+                        {
+                            "key": "h2h",
+                            "last_update": "2026-02-14T20:00:00Z",
+                            "outcomes": [
+                                {"name": "New York Yankees", "price": -150},
+                                {"name": "Boston Red Sox", "price": 130},
+                            ],
+                        },
+                        {
+                            "key": "player_props",  # Unknown market type
+                            "last_update": "2026-02-14T20:00:00Z",
+                            "outcomes": [
+                                {"name": "Aaron Judge", "price": -110},
+                            ],
+                        },
+                        {
+                            "key": "first_inning_winner",  # Unknown market type
+                            "last_update": "2026-02-14T20:00:00Z",
+                            "outcomes": [
+                                {"name": "New York Yankees", "price": 200},
+                            ],
+                        },
+                    ],
+                },
+            ],
+        },
+    ]
+
+    class MockResponse:
+        status = 200
+
+        async def text(self):
+            import json
+
+            return json.dumps(mock_response)
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc_val, exc_tb):
+            pass
+
+    class MockSession:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def get(self, url, params=None):
+            return MockResponse()
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc_val, exc_tb):
+            pass
+
+    class MockConnection:
+        async def fetch(self, query, *args):
+            if "team_id" in query and "name" in query and "teams" in query.lower():
+                return [
+                    {"team_id": 147, "name": "New York Yankees"},
+                    {"team_id": 111, "name": "Boston Red Sox"},
+                ]
+            elif "game_id" in query and "first_pitch" in query and "games" in query.lower():
+                return [{"game_id": "test_game_odds_3", "first_pitch": datetime(2026, 2, 15, 0, 10, 0, tzinfo=timezone.utc)}]
+            return []
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc_val, exc_tb):
+            pass
+
+    class MockPool:
+        def acquire(self):
+            return MockConnection()
+
+    async def mock_get_pool():
+        return MockPool()
+
+    cache = get_cache()
+    cache.clear()
+
+    class MockConfig:
+        odds_api_key = "test_api_key"
+        odds_api_base_url = "https://api.the-odds-api.com/v4"
+
+    with patch("aiohttp.ClientSession", MockSession), patch(
+        "mlb.ingestion.odds.get_pool", mock_get_pool
+    ), patch("mlb.ingestion.odds.get_config", return_value=MockConfig()):
+        rows = await odds_provider.fetch_odds("test_game_odds_3")
+
+    # Verify only h2h market was parsed (unknown markets skipped)
+    assert len(rows) == 2  # Only 2 h2h outcomes
+    assert all(r.market == "ml" for r in rows)
+    # Verify no player_props or first_inning_winner
+    assert not any(r.book == "Aaron Judge" for r in rows)
+
+
+@pytest.mark.asyncio
+async def test_fetch_odds_no_game_match_skips_event():
+    """
+    Test that fetch_odds skips events when no matching game is found (FC-31).
+
+    Verifies:
+    - Events with unknown home team are skipped
+    - Events with no matching game_id are skipped
+    - Only returns odds for games that exist in database
+    """
+    odds_provider = V1OddsProvider()
+
+    # Mock response with 2 events: one matchable, one not
+    mock_response = [
+        {
+            "id": "event1",
+            "commence_time": "2026-02-15T00:10:00Z",
+            "home_team": "New York Yankees",  # Known team
+            "away_team": "Boston Red Sox",
+            "bookmakers": [
+                {
+                    "key": "draftkings",
+                    "markets": [
+                        {
+                            "key": "h2h",
+                            "last_update": "2026-02-14T20:00:00Z",
+                            "outcomes": [
+                                {"name": "New York Yankees", "price": -150},
+                                {"name": "Boston Red Sox", "price": 130},
+                            ],
+                        },
+                    ],
+                },
+            ],
+        },
+        {
+            "id": "event2",
+            "commence_time": "2026-02-15T00:10:00Z",
+            "home_team": "Unknown Team XYZ",  # Unknown team
+            "away_team": "Another Unknown Team",
+            "bookmakers": [
+                {
+                    "key": "draftkings",
+                    "markets": [
+                        {
+                            "key": "h2h",
+                            "last_update": "2026-02-14T20:00:00Z",
+                            "outcomes": [
+                                {"name": "Unknown Team XYZ", "price": -110},
+                                {"name": "Another Unknown Team", "price": -110},
+                            ],
+                        },
+                    ],
+                },
+            ],
+        },
+    ]
+
+    class MockResponse:
+        status = 200
+
+        async def text(self):
+            import json
+
+            return json.dumps(mock_response)
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc_val, exc_tb):
+            pass
+
+    class MockSession:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def get(self, url, params=None):
+            return MockResponse()
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc_val, exc_tb):
+            pass
+
+    class MockConnection:
+        async def fetch(self, query, *args):
+            if "team_id" in query and "name" in query and "teams" in query.lower():
+                return [
+                    {"team_id": 147, "name": "New York Yankees"},
+                    {"team_id": 111, "name": "Boston Red Sox"},
+                ]
+            elif "game_id" in query and "first_pitch" in query and "games" in query.lower():
+                # Only return game for Yankees (event1), not for Unknown Team (event2)
+                if args and args[0] == 147:  # Yankees team_id
+                    return [{"game_id": "test_game_odds_4", "first_pitch": datetime(2026, 2, 15, 0, 10, 0, tzinfo=timezone.utc)}]
+                return []
+            return []
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc_val, exc_tb):
+            pass
+
+    class MockPool:
+        def acquire(self):
+            return MockConnection()
+
+    async def mock_get_pool():
+        return MockPool()
+
+    cache = get_cache()
+    cache.clear()
+
+    class MockConfig:
+        odds_api_key = "test_api_key"
+        odds_api_base_url = "https://api.the-odds-api.com/v4"
+
+    with patch("aiohttp.ClientSession", MockSession), patch(
+        "mlb.ingestion.odds.get_pool", mock_get_pool
+    ), patch("mlb.ingestion.odds.get_config", return_value=MockConfig()):
+        rows = await odds_provider.fetch_odds("test_game_odds_4")
+
+    # Verify only event1 odds returned (event2 skipped due to unknown team)
+    assert len(rows) == 2
+    assert all(r.game_id == "test_game_odds_4" for r in rows)
+
+
+@pytest.mark.asyncio
+async def test_fetch_odds_api_timeout_returns_empty():
+    """
+    Test that fetch_odds returns empty list on API timeout (FC-31).
+
+    Verifies conservative fallback: on timeout exception, log warning and return [].
+    """
+    odds_provider = V1OddsProvider()
+
+    # Mock aiohttp timeout
+    class MockSession:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def get(self, url, params=None):
+            raise asyncio.TimeoutError("API timeout")
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc_val, exc_tb):
+            pass
+
+    cache = get_cache()
+    cache.clear()
+
+    class MockConfig:
+        odds_api_key = "test_api_key"
+        odds_api_base_url = "https://api.the-odds-api.com/v4"
+
+    with patch("aiohttp.ClientSession", MockSession), patch(
+        "mlb.ingestion.odds.get_config", return_value=MockConfig()
+    ):
+        rows = await odds_provider.fetch_odds("test_game_odds_5")
+
+    # Should return empty list on timeout
+    assert rows == []
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

@@ -8,7 +8,7 @@ This document tracks all architectural and implementation decisions made through
 
 - [Unit 1: Repository Skeleton & Configuration](#unit-1-repository-skeleton--configuration) (D-001 to D-004)
 - [Unit 2: Database Schema & Migrations](#unit-2-database-schema--migrations) (D-005 to D-016)
-- [Unit 3: Data Ingestion](#unit-3-data-ingestion--provider-agnostic-interfaces) (D-017 to D-020, D-055)
+- [Unit 3: Data Ingestion](#unit-3-data-ingestion--provider-agnostic-interfaces) (D-017 to D-020, D-055, D-056)
 - [Unit 4: Team Run-Scoring Models](#unit-4-team-run-scoring-models) (D-021 to D-026)
 - [Unit 5: Player Prop Models](#unit-5-player-prop-models) (D-027 to D-031)
 - [Unit 6: Monte Carlo Simulation Engine](#unit-6-monte-carlo-simulation-engine) (D-032 to D-035)
@@ -18,7 +18,7 @@ This document tracks all architectural and implementation decisions made through
 - [Unit 10: Discord Bot & Publishing Layer](#unit-10-discord-bot--publishing-layer) (D-047 to D-050)
 - [Unit 11: Stripe Subscription & Webhook Integration](#unit-11-stripe-subscription--webhook-integration) (D-051 to D-054)
 
-**Total Decisions:** 55
+**Total Decisions:** 56
 
 ---
 
@@ -194,7 +194,15 @@ This document tracks all architectural and implementation decisions made through
 
 **Decision**: V1GameProvider.fetch_schedule() fetches from MLB Stats API endpoint `/schedule?sportId=1&date={YYYY-MM-DD}&hydrate=team,venue` with 10-second timeout. Field mappings: game_id ← gamePk (as string), game_date ← officialDate, home_team_id/away_team_id ← teams.home/away.team.id, park_id ← venue.id (with DB fallback to home team's park if missing), first_pitch ← gameDate (parsed as UTC), status ← abstractGameCode (F→final, D→postponed, else→scheduled), home_score/away_score ← teams.home/away.score (populated only when status=final). On any exception (timeout, HTTP error, parse error), log warning and return empty list. Base URL is configurable via mlb_stats_api_base_url in AppConfig.
 
-**Rationale**: MLB Stats API is the canonical free source for MLB game schedules with team/venue hydration. Conservative fallback (return []) prevents pipeline failures from propagating downstream while logging failures for monitoring. Park fallback (SELECT park_id FROM parks WHERE team_id = home_team_id) handles edge cases where venue.id is missing or unknown, preventing game skips due to incomplete API data. 10-second timeout balances reliability (typical API latency <2s) vs. pipeline responsiveness. Configurable base URL allows testing against mock servers or switching providers without code changes. Field mappings align with D-014 (game_id is provider-canonical) and D-025 (scores populated only when final).
+**Rationale**: MLB Stats API is the canonical free source for MLB game schedules with team/venue hydration. Conservative fallback (return []) prevents pipeline failures from propagating downstream while logging failures for monitoring. Park fallback (SELECT park_id FROM parks WHERE team_id = home team's park if missing) handles edge cases where venue.id is missing or unknown, preventing game skips due to incomplete API data. 10-second timeout balances reliability (typical API latency <2s) vs. pipeline responsiveness. Configurable base URL allows testing against mock servers or switching providers without code changes. Field mappings align with D-014 (game_id is provider-canonical) and D-025 (scores populated only when final).
+
+---
+
+### D-056: V1OddsProvider uses The Odds API with cached responses and defensive mappings
+
+**Decision**: V1OddsProvider.fetch_odds() fetches from The Odds API endpoint `/sports/baseball_mlb/odds?apiKey={key}&regions=us&markets=h2h,spreads,totals&oddsFormat=american` with 10-second timeout and 5-minute TTL cache. Market mappings: h2h→ml, spreads→rl, totals→total. American odds converted to decimal via D-006 formula. Team name to ID lookup uses fuzzy matching against teams table. Game ID resolution queries games table by (game_date, home_team_id, away_team_id) with doubleheader_seq disambiguation. On lookup failures (unknown team, no matching game, ambiguous doubleheader), log warning and skip that odds entry. On API failures (timeout, HTTP error, invalid JSON), return empty list. Base URL and API key configurable via odds_api_base_url and odds_api_key in AppConfig.
+
+**Rationale**: The Odds API is a free-tier provider for MLB odds with h2h/spreads/totals markets covering v1 scope. TTL cache reduces API quota consumption (free tier: 500 requests/month) while keeping odds fresh enough for ingestion runs (D-043, D-044). Fuzzy team name matching handles provider inconsistencies (e.g., "LA Dodgers" vs "Los Angeles Dodgers") without requiring brittle exact-match lookups. Game ID resolution by (date, teams, doubleheader_seq) bridges provider game identities to our canonical game_id (D-014). Skipping unresolvable odds entries prevents FK violations while logging failures for monitoring. Conservative error handling (return []) aligns with D-019 (adapters are stateless, retry owned by scheduler). Market mapping to our internal nomenclature (ml/rl/total) keeps odds_snapshots.market values consistent with downstream consumers (Unit 7). Configurable base URL/key enables testing and provider switching.
 
 ---
 
