@@ -1,5 +1,7 @@
 """Pytest configuration and fixtures for database tests."""
 
+import asyncio
+
 import pytest_asyncio
 
 from mlb.db.pool import get_pool, close_pool
@@ -24,5 +26,9 @@ async def pool():
 
     yield pool
 
-    # Cleanup: close the pool after all tests
-    await close_pool()
+    # Cleanup: close the pool after all tests with defensive timeout
+    try:
+        await asyncio.wait_for(close_pool(), timeout=10.0)
+    except asyncio.TimeoutError:
+        # close_pool() itself has timeout+terminate logic, but this is extra defense
+        pass

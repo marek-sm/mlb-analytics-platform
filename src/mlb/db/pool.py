@@ -1,11 +1,14 @@
 """Database connection pool factory and health check."""
 
 import asyncio
+import logging
 from typing import Optional
 
 import asyncpg
 
 from mlb.config import get_config
+
+logger = logging.getLogger(__name__)
 
 
 _pool: Optional[asyncpg.Pool] = None
@@ -69,8 +72,24 @@ async def get_pool() -> asyncpg.Pool:
 
 
 async def close_pool() -> None:
-    """Close the database connection pool if it exists."""
+    """
+    Close the database connection pool if it exists.
+
+    Attempts graceful close with a 5-second timeout. If the timeout occurs
+    (e.g., due to leaked connections), forces termination to prevent hangs.
+    """
     global _pool
     if _pool is not None:
-        await _pool.close()
-        _pool = None
+        try:
+            # Try graceful close with timeout
+            await asyncio.wait_for(_pool.close(), timeout=5.0)
+        except asyncio.TimeoutError:
+            # Force termination if graceful close hangs
+            logger.warning(
+                "Pool close timed out after 5 seconds. "
+                "Forcing termination (likely leaked connection)."
+            )
+            _pool.terminate()
+        finally:
+            # Always clear the pool reference
+            _pool = None
