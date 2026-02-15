@@ -443,6 +443,14 @@ async def test_train_completes_and_serializes_models(pool, sample_game_data):
                 INSERT INTO {Table.GAMES} (game_id, game_date, home_team_id, away_team_id,
                                             park_id, status, home_score, away_score)
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                ON CONFLICT (game_id) DO UPDATE SET
+                    game_date = EXCLUDED.game_date,
+                    home_team_id = EXCLUDED.home_team_id,
+                    away_team_id = EXCLUDED.away_team_id,
+                    park_id = EXCLUDED.park_id,
+                    status = EXCLUDED.status,
+                    home_score = EXCLUDED.home_score,
+                    away_score = EXCLUDED.away_score
                 """,
                 game_id,
                 game_date,
@@ -470,6 +478,17 @@ async def test_train_completes_and_serializes_models(pool, sample_game_data):
                     'P',
                     'R',
                     'R',
+                )
+
+                # Delete existing lineup for this slot to prevent duplicates
+                await conn.execute(
+                    f"""
+                    DELETE FROM {Table.LINEUPS}
+                    WHERE game_id = $1 AND team_id = $2 AND batting_order = $3
+                    """,
+                    game_id,
+                    team_id,
+                    1,
                 )
 
                 await conn.execute(
