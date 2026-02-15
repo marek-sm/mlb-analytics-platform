@@ -32,6 +32,13 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for detailed Mermaid diagrams a
 
 ## Data Flow
 
+### Data Sources
+
+- **The Odds API**: Odds data (moneyline, run line, totals) with American-to-decimal conversion (D-056)
+- **MLB Stats API**: Game schedules, team rosters, and official game data (D-055)
+- **Weather API**: Outdoor park weather conditions (temperature, wind, precipitation)
+- **Stats Provider**: Player statistics and performance data
+
 1. **Ingestion** (Unit 3): Fetch odds, lineups, player stats, game schedules, and weather from external providers. Convert American odds to European decimal format. Store with source timestamps for temporal tracking.
 2. **Feature Engineering** (Unit 4): Build game-level features including park factors, weather conditions, starting pitcher metrics (rest, rolling pitch count, shrunk ERA), lineup strength (OPS with empirical Bayes shrinkage), and bullpen fatigue.
 3. **Team Run Models** (Unit 4): Train LightGBM models to predict mean (μ) and dispersion (r) for home and away team run distributions. Apply park factors as multiplicative adjustments to μ (exactly once).
