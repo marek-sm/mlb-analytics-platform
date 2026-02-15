@@ -1,0 +1,41 @@
+{
+  "teams": {
+    "home": {
+      "team": {"id": 147},
+      "players": {
+        "ID12345": {
+          "person": {"id": 12345, "fullName": "Aaron Judge"},
+          "position": {"abbreviation": "RF"},
+          "battingOrder": "100"
+        },
+        "ID12346": {
+          "person": {"id": 12346, "fullName": "Anthony Rizzo"},
+          "position": {"abbreviation": "1B"},
+          "battingOrder": "200"
+        },
+        "ID12347": {
+          "person": {"id": 12347, "fullName": "Gleyber Torres"},
+          "position": {"abbreviation": "2B"},
+          "battingOrder": "300"
+        },
+        "ID12348": {
+          "person": {"id": 12348, "fullName": "Anthony Volpe"},
+          "position": {"abbreviation": "SS"},
+          "battingOrder": "400"
+        },
+        "ID12349": {
+          "person": {"id": 12349, "fullName": "Giancarlo Stanton"},
+          "position": {"abbreviation": "DH"},
+          "battingOrder": "500"
+        },
+        "ID12350": {
+          "person": {"id": 12350, "fullName": "DJ LeMahieu"},
+          "position": {"abbreviation": "3B"},
+          "battingOrder": "600"
+        }
+      },
+      "battingOrder": [12345, 12346, 12347, 12348, 12349, 12350]
+    }
+  },
+  "status": {"abstractGameCode": "P"}
+}

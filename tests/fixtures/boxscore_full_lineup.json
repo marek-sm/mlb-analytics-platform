@@ -1,0 +1,107 @@
+{
+  "teams": {
+    "home": {
+      "team": {"id": 147},
+      "players": {
+        "ID12345": {
+          "person": {"id": 12345, "fullName": "Aaron Judge"},
+          "position": {"abbreviation": "RF"},
+          "battingOrder": "100"
+        },
+        "ID12346": {
+          "person": {"id": 12346, "fullName": "Anthony Rizzo"},
+          "position": {"abbreviation": "1B"},
+          "battingOrder": "200"
+        },
+        "ID12347": {
+          "person": {"id": 12347, "fullName": "Gleyber Torres"},
+          "position": {"abbreviation": "2B"},
+          "battingOrder": "300"
+        },
+        "ID12348": {
+          "person": {"id": 12348, "fullName": "Anthony Volpe"},
+          "position": {"abbreviation": "SS"},
+          "battingOrder": "400"
+        },
+        "ID12349": {
+          "person": {"id": 12349, "fullName": "Giancarlo Stanton"},
+          "position": {"abbreviation": "DH"},
+          "battingOrder": "500"
+        },
+        "ID12350": {
+          "person": {"id": 12350, "fullName": "DJ LeMahieu"},
+          "position": {"abbreviation": "3B"},
+          "battingOrder": "600"
+        },
+        "ID12351": {
+          "person": {"id": 12351, "fullName": "Harrison Bader"},
+          "position": {"abbreviation": "CF"},
+          "battingOrder": "700"
+        },
+        "ID12352": {
+          "person": {"id": 12352, "fullName": "Oswaldo Cabrera"},
+          "position": {"abbreviation": "LF"},
+          "battingOrder": "800"
+        },
+        "ID12353": {
+          "person": {"id": 12353, "fullName": "Jose Trevino"},
+          "position": {"abbreviation": "C"},
+          "battingOrder": "900"
+        }
+      },
+      "battingOrder": [12345, 12346, 12347, 12348, 12349, 12350, 12351, 12352, 12353]
+    },
+    "away": {
+      "team": {"id": 111},
+      "players": {
+        "ID23456": {
+          "person": {"id": 23456, "fullName": "Rafael Devers"},
+          "position": {"abbreviation": "3B"},
+          "battingOrder": "100"
+        },
+        "ID23457": {
+          "person": {"id": 23457, "fullName": "Justin Turner"},
+          "position": {"abbreviation": "DH"},
+          "battingOrder": "200"
+        },
+        "ID23458": {
+          "person": {"id": 23458, "fullName": "Masataka Yoshida"},
+          "position": {"abbreviation": "LF"},
+          "battingOrder": "300"
+        },
+        "ID23459": {
+          "person": {"id": 23459, "fullName": "Triston Casas"},
+          "position": {"abbreviation": "1B"},
+          "battingOrder": "400"
+        },
+        "ID23460": {
+          "person": {"id": 23460, "fullName": "Jarren Duran"},
+          "position": {"abbreviation": "CF"},
+          "battingOrder": "500"
+        },
+        "ID23461": {
+          "person": {"id": 23461, "fullName": "Connor Wong"},
+          "position": {"abbreviation": "C"},
+          "battingOrder": "600"
+        },
+        "ID23462": {
+          "person": {"id": 23462, "fullName": "Enrique Hernandez"},
+          "position": {"abbreviation": "RF"},
+          "battingOrder": "700"
+        },
+        "ID23463": {
+          "person": {"id": 23463, "fullName": "Pablo Reyes"},
+          "position": {"abbreviation": "2B"},
+          "battingOrder": "800"
+        },
+        "ID23464": {
+          "person": {"id": 23464, "fullName": "David Hamilton"},
+          "position": {"abbreviation": "SS"},
+          "battingOrder": "900"
+        }
+      },
+      "battingOrder": [23456, 23457, 23458, 23459, 23460, 23461, 23462, 23463, 23464]
+    }
+  },
+  "status": {"abstractGameCode": "P"}
+}

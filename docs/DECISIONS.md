@@ -493,3 +493,21 @@ This document tracks all architectural and implementation decisions made through
 **Rationale**: Links Stripe customer to Discord identity without requiring a separate mapping table. Sufficient for single-plan v1.
 
 ---
+
+### D-055: MLB Stats API schedule endpoint is v1 game provider.
+
+**Decision**: MLB Stats API schedule endpoint is v1 game provider. Endpoint: `GET /api/v1/schedule?sportId=1&date=YYYY-MM-DD`. Maps `gamePk` to `game_id`, `venue.id` to `park_id` with fallback to home team's park (FC-32). Status mapping: `F`→`final`, `L`→`final`, `P`/`S`→`scheduled`, `D`/`I`→`postponed`. Scores populated when `abstractGameCode` in `{F, L}`. Timeout 10s, `[]` on failure per D-019. No API key required.
+
+---
+
+### D-056: The Odds API is v1 odds provider with defensive team name→ID mapping.
+
+**Decision**: The Odds API is v1 odds provider. Endpoint: `GET /v4/sports/baseball_mlb/odds?apiKey=X&regions=us&markets=h2h,spreads,totals&oddsFormat=american`. Maps team names to `team_id` via DB query. Markets: `h2h`→`ml`, `spreads`→`rl`, `totals`→`total`. Side: home/away (h2h, spreads), over/under (totals). Matches games via home `team_id` + `commence_time` ±6h. Converts American→decimal per D-017. Skips events with unmappable teams or no matching game. HTTP response cache (1-minute TTL) per D-055. Timeout 10s, `[]` on failure per D-019. API key required (config: `odds_api_key`).
+
+---
+
+### D-057: MLB Stats API boxscore is v1 lineup provider.
+
+**Decision**: MLB Stats API boxscore is v1 lineup provider. Endpoint: `GET /api/v1/game/{gamePk}/boxscore`. Confirmation: `is_confirmed=TRUE` if status is Live/Final (`L`/`F`) OR Preview/Scheduled (`P`/`S`) with exactly 9 players (not 9+, to avoid confirming placeholder lineups). Batting order from `battingOrder` field ("100"–"900" → 1–9); fallback to `battingOrder` array. Players with `battingOrder="0"` or outside [1,9] skipped. Unknown players upserted per D-020. Prior confirmed rows flipped per D-011. Lineups are append-only (versioned via `source_ts`); no ON CONFLICT on insert. Timeout 10s, `[]` on failure per D-019. No API key required.
+
+---

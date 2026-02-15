@@ -1790,5 +1790,724 @@ async def test_fetch_odds_api_timeout_returns_empty():
     assert rows == []
 
 
+# ============================================================================
+# Step 1C: Lineups Ingestion Tests
+# ============================================================================
+
+
+@pytest.mark.asyncio
+async def test_lineup_parse_standard_lineup():
+    """
+    AC1: Parse standard lineup.
+    Mock API returns 9 players with battingOrder "100"–"900", status "P".
+    Assert: exactly 9 LineupRow, is_confirmed=TRUE, batting_order in [1,9].
+    """
+    import json
+    from pathlib import Path
+
+    lineup_provider = V1LineupProvider()
+
+    # Load fixture
+    fixture_path = Path(__file__).parent / "fixtures" / "boxscore_full_lineup.json"
+    with open(fixture_path) as f:
+        mock_response = json.load(f)
+
+    # Mock aiohttp response
+    class MockResponse:
+        async def json(self):
+            return mock_response
+
+        def raise_for_status(self):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc_val, exc_tb):
+            pass
+
+    class MockSession:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def get(self, url, params=None):
+            return MockResponse()
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc_val, exc_tb):
+            pass
+
+    class MockConfig:
+        mlb_stats_api_base_url = "https://statsapi.mlb.com/api/v1"
+
+    with patch("aiohttp.ClientSession", MockSession), patch(
+        "mlb.ingestion.lineups.get_config", return_value=MockConfig()
+    ), patch("mlb.ingestion.lineups.V1LineupProvider._persist_lineups", new_callable=AsyncMock):
+        rows = await lineup_provider.fetch_lineup("test_game_ac1", team_id=None)
+
+    # Verify: 18 total rows (9 home + 9 away)
+    assert len(rows) == 18
+
+    # Verify home lineup
+    home_rows = [r for r in rows if r.team_id == 147]
+    assert len(home_rows) == 9
+    assert all(r.is_confirmed for r in home_rows)
+    assert all(1 <= r.batting_order <= 9 for r in home_rows)
+    assert set(r.batting_order for r in home_rows) == set(range(1, 10))
+
+    # Verify away lineup
+    away_rows = [r for r in rows if r.team_id == 111]
+    assert len(away_rows) == 9
+    assert all(r.is_confirmed for r in away_rows)
+    assert all(1 <= r.batting_order <= 9 for r in away_rows)
+    assert set(r.batting_order for r in away_rows) == set(range(1, 10))
+
+
+@pytest.mark.asyncio
+async def test_lineup_confirm_on_game_start():
+    """
+    AC2: Confirm on game start.
+    Mock status "L" with 9 players. Assert: all is_confirmed=TRUE.
+    """
+    import json
+    from pathlib import Path
+
+    lineup_provider = V1LineupProvider()
+
+    # Load fixture
+    fixture_path = Path(__file__).parent / "fixtures" / "boxscore_game_live.json"
+    with open(fixture_path) as f:
+        mock_response = json.load(f)
+
+    class MockResponse:
+        async def json(self):
+            return mock_response
+
+        def raise_for_status(self):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc_val, exc_tb):
+            pass
+
+    class MockSession:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def get(self, url, params=None):
+            return MockResponse()
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc_val, exc_tb):
+            pass
+
+    class MockConfig:
+        mlb_stats_api_base_url = "https://statsapi.mlb.com/api/v1"
+
+    with patch("aiohttp.ClientSession", MockSession), patch(
+        "mlb.ingestion.lineups.get_config", return_value=MockConfig()
+    ), patch("mlb.ingestion.lineups.V1LineupProvider._persist_lineups", new_callable=AsyncMock):
+        rows = await lineup_provider.fetch_lineup("test_game_ac2", team_id=147)
+
+    # Verify: 9 rows, all confirmed (game live)
+    assert len(rows) == 9
+    assert all(r.is_confirmed for r in rows)
+    assert all(r.team_id == 147 for r in rows)
+
+
+@pytest.mark.asyncio
+async def test_lineup_partial_lineup_unconfirmed():
+    """
+    AC3: Partial lineup unconfirmed.
+    Mock 6 players, status "P". Assert: 6 rows, all is_confirmed=FALSE.
+    """
+    import json
+    from pathlib import Path
+
+    lineup_provider = V1LineupProvider()
+
+    # Load fixture
+    fixture_path = Path(__file__).parent / "fixtures" / "boxscore_partial.json"
+    with open(fixture_path) as f:
+        mock_response = json.load(f)
+
+    class MockResponse:
+        async def json(self):
+            return mock_response
+
+        def raise_for_status(self):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc_val, exc_tb):
+            pass
+
+    class MockSession:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def get(self, url, params=None):
+            return MockResponse()
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc_val, exc_tb):
+            pass
+
+    class MockConfig:
+        mlb_stats_api_base_url = "https://statsapi.mlb.com/api/v1"
+
+    with patch("aiohttp.ClientSession", MockSession), patch(
+        "mlb.ingestion.lineups.get_config", return_value=MockConfig()
+    ), patch("mlb.ingestion.lineups.V1LineupProvider._persist_lineups", new_callable=AsyncMock):
+        rows = await lineup_provider.fetch_lineup("test_game_ac3", team_id=147)
+
+    # Verify: 6 rows, all unconfirmed (partial lineup)
+    assert len(rows) == 6
+    assert all(not r.is_confirmed for r in rows)
+    assert all(r.team_id == 147 for r in rows)
+
+
+@pytest.mark.asyncio
+async def test_lineup_d011_flip_logic():
+    """
+    AC4: D-011 flip logic.
+    Pre-insert confirmed lineup. Fetch new confirmed lineup.
+    Assert: old rows is_confirmed=FALSE, new rows is_confirmed=TRUE.
+    """
+    pool = await get_pool()
+
+    try:
+        # Setup: Create test game
+        async with pool.acquire() as conn:
+            teams = await conn.fetch("SELECT team_id FROM teams LIMIT 2")
+            park = await conn.fetchval("SELECT park_id FROM parks LIMIT 1")
+
+            home_team_id = teams[0]["team_id"]
+            away_team_id = teams[1]["team_id"]
+
+            await conn.execute(
+                """
+                INSERT INTO games (game_id, game_date, home_team_id, away_team_id, park_id, status)
+                VALUES ('test_game_ac4', '2026-02-14', $1, $2, $3, 'scheduled')
+                ON CONFLICT (game_id) DO NOTHING
+                """,
+                home_team_id,
+                away_team_id,
+                park,
+            )
+
+        # Insert initial confirmed lineup
+        initial_lineup = [
+            LineupRow(
+                game_id="test_game_ac4",
+                team_id=home_team_id,
+                player_id=30000 + i,
+                batting_order=i + 1,
+                is_confirmed=True,
+                source_ts=datetime(2026, 2, 14, 10, 0, 0, tzinfo=timezone.utc),
+            )
+            for i in range(9)
+        ]
+
+        lineup_provider = V1LineupProvider()
+        await lineup_provider._persist_lineups(initial_lineup)
+
+        # Verify initial lineup is confirmed
+        async with pool.acquire() as conn:
+            count_confirmed = await conn.fetchval(
+                "SELECT COUNT(*) FROM lineups WHERE game_id = 'test_game_ac4' AND is_confirmed = TRUE"
+            )
+            assert count_confirmed == 9
+
+        # Insert new confirmed lineup (different players)
+        new_lineup = [
+            LineupRow(
+                game_id="test_game_ac4",
+                team_id=home_team_id,
+                player_id=40000 + i,
+                batting_order=i + 1,
+                is_confirmed=True,
+                source_ts=datetime(2026, 2, 14, 11, 0, 0, tzinfo=timezone.utc),
+            )
+            for i in range(9)
+        ]
+
+        await lineup_provider._persist_lineups(new_lineup)
+
+        # Verify: Old lineup flipped to FALSE
+        async with pool.acquire() as conn:
+            old_confirmed_count = await conn.fetchval(
+                """
+                SELECT COUNT(*)
+                FROM lineups
+                WHERE game_id = 'test_game_ac4'
+                  AND player_id BETWEEN 30000 AND 30008
+                  AND is_confirmed = TRUE
+                """
+            )
+            assert old_confirmed_count == 0
+
+            # Verify: New lineup is confirmed
+            new_confirmed_count = await conn.fetchval(
+                """
+                SELECT COUNT(*)
+                FROM lineups
+                WHERE game_id = 'test_game_ac4'
+                  AND player_id BETWEEN 40000 AND 40008
+                  AND is_confirmed = TRUE
+                """
+            )
+            assert new_confirmed_count == 9
+
+    finally:
+        # Cleanup
+        async with pool.acquire() as conn:
+            await conn.execute("DELETE FROM lineups WHERE game_id = 'test_game_ac4'")
+            await conn.execute("DELETE FROM players WHERE player_id BETWEEN 30000 AND 30008")
+            await conn.execute("DELETE FROM players WHERE player_id BETWEEN 40000 AND 40008")
+            await conn.execute("DELETE FROM games WHERE game_id = 'test_game_ac4'")
+
+
+@pytest.mark.asyncio
+async def test_lineup_d020_player_upsert():
+    """
+    AC5: D-020 player upsert.
+    Mock lineup with unknown player_id. Assert: player upserted; lineup inserted without FK error.
+    """
+    pool = await get_pool()
+
+    try:
+        # Setup: Create test game
+        async with pool.acquire() as conn:
+            teams = await conn.fetch("SELECT team_id FROM teams LIMIT 2")
+            park = await conn.fetchval("SELECT park_id FROM parks LIMIT 1")
+
+            home_team_id = teams[0]["team_id"]
+            away_team_id = teams[1]["team_id"]
+
+            await conn.execute(
+                """
+                INSERT INTO games (game_id, game_date, home_team_id, away_team_id, park_id, status)
+                VALUES ('test_game_ac5', '2026-02-14', $1, $2, $3, 'scheduled')
+                ON CONFLICT (game_id) DO NOTHING
+                """,
+                home_team_id,
+                away_team_id,
+                park,
+            )
+
+        # Delete player if exists (start clean)
+        async with pool.acquire() as conn:
+            await conn.execute("DELETE FROM players WHERE player_id = 50000")
+
+        # Verify player does not exist
+        async with pool.acquire() as conn:
+            player_exists = await conn.fetchval(
+                "SELECT COUNT(*) FROM players WHERE player_id = 50000"
+            )
+            assert player_exists == 0
+
+        # Create lineup with unknown player
+        lineup = [
+            LineupRow(
+                game_id="test_game_ac5",
+                team_id=home_team_id,
+                player_id=50000,
+                batting_order=1,
+                is_confirmed=True,
+                source_ts=datetime(2026, 2, 14, 10, 0, 0, tzinfo=timezone.utc),
+            )
+        ]
+
+        lineup_provider = V1LineupProvider()
+        await lineup_provider._persist_lineups(lineup)
+
+        # Verify player was auto-created
+        async with pool.acquire() as conn:
+            player_row = await conn.fetchrow(
+                "SELECT player_id, name FROM players WHERE player_id = 50000"
+            )
+            assert player_row is not None
+            assert player_row["player_id"] == 50000
+
+        # Verify lineup was inserted
+        async with pool.acquire() as conn:
+            lineup_count = await conn.fetchval(
+                "SELECT COUNT(*) FROM lineups WHERE game_id = 'test_game_ac5' AND player_id = 50000"
+            )
+            assert lineup_count == 1
+
+    finally:
+        # Cleanup
+        async with pool.acquire() as conn:
+            await conn.execute("DELETE FROM lineups WHERE game_id = 'test_game_ac5'")
+            await conn.execute("DELETE FROM players WHERE player_id = 50000")
+            await conn.execute("DELETE FROM games WHERE game_id = 'test_game_ac5'")
+
+
+@pytest.mark.asyncio
+async def test_lineup_skip_bench_players():
+    """
+    AC6: Skip bench players.
+    Mock 11 players (9 + 2 with battingOrder="0"). Assert: exactly 9 rows returned.
+    """
+    import json
+    from pathlib import Path
+
+    lineup_provider = V1LineupProvider()
+
+    # Load fixture
+    fixture_path = Path(__file__).parent / "fixtures" / "boxscore_with_bench.json"
+    with open(fixture_path) as f:
+        mock_response = json.load(f)
+
+    class MockResponse:
+        async def json(self):
+            return mock_response
+
+        def raise_for_status(self):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc_val, exc_tb):
+            pass
+
+    class MockSession:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def get(self, url, params=None):
+            return MockResponse()
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc_val, exc_tb):
+            pass
+
+    class MockConfig:
+        mlb_stats_api_base_url = "https://statsapi.mlb.com/api/v1"
+
+    with patch("aiohttp.ClientSession", MockSession), patch(
+        "mlb.ingestion.lineups.get_config", return_value=MockConfig()
+    ), patch("mlb.ingestion.lineups.V1LineupProvider._persist_lineups", new_callable=AsyncMock):
+        rows = await lineup_provider.fetch_lineup("test_game_ac6", team_id=147)
+
+    # Verify: exactly 9 rows (bench players skipped)
+    assert len(rows) == 9
+    assert all(1 <= r.batting_order <= 9 for r in rows)
+    # Verify bench players not included
+    assert all(r.player_id not in [12354, 12355] for r in rows)
+
+
+@pytest.mark.asyncio
+async def test_lineup_fallback_to_array():
+    """
+    AC7: Fallback to array.
+    Mock missing battingOrder field with battingOrder array present.
+    Assert: order from array index.
+    """
+    lineup_provider = V1LineupProvider()
+
+    # Mock response with missing battingOrder field
+    mock_response = {
+        "teams": {
+            "home": {
+                "team": {"id": 147},
+                "players": {
+                    "ID12345": {
+                        "person": {"id": 12345, "fullName": "Aaron Judge"},
+                        "position": {"abbreviation": "RF"},
+                        # battingOrder field missing
+                    },
+                    "ID12346": {
+                        "person": {"id": 12346, "fullName": "Anthony Rizzo"},
+                        "position": {"abbreviation": "1B"},
+                        # battingOrder field missing
+                    },
+                },
+                "battingOrder": [12345, 12346],  # Fallback array
+            }
+        },
+        "status": {"abstractGameCode": "P"},
+    }
+
+    class MockResponse:
+        async def json(self):
+            return mock_response
+
+        def raise_for_status(self):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc_val, exc_tb):
+            pass
+
+    class MockSession:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def get(self, url, params=None):
+            return MockResponse()
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc_val, exc_tb):
+            pass
+
+    class MockConfig:
+        mlb_stats_api_base_url = "https://statsapi.mlb.com/api/v1"
+
+    with patch("aiohttp.ClientSession", MockSession), patch(
+        "mlb.ingestion.lineups.get_config", return_value=MockConfig()
+    ), patch("mlb.ingestion.lineups.V1LineupProvider._persist_lineups", new_callable=AsyncMock):
+        rows = await lineup_provider.fetch_lineup("test_game_ac7", team_id=147)
+
+    # Verify: 2 rows with batting_order from array index
+    assert len(rows) == 2
+    # Player 12345 should be batting_order 1 (index 0)
+    judge = next(r for r in rows if r.player_id == 12345)
+    assert judge.batting_order == 1
+    # Player 12346 should be batting_order 2 (index 1)
+    rizzo = next(r for r in rows if r.player_id == 12346)
+    assert rizzo.batting_order == 2
+
+
+@pytest.mark.asyncio
+async def test_lineup_api_timeout():
+    """
+    AC8: API timeout.
+    Mock timeout. Assert: returns [], logs warning.
+    """
+    lineup_provider = V1LineupProvider()
+
+    # Mock aiohttp timeout
+    class MockSession:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def get(self, url, params=None):
+            raise asyncio.TimeoutError("API timeout")
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc_val, exc_tb):
+            pass
+
+    class MockConfig:
+        mlb_stats_api_base_url = "https://statsapi.mlb.com/api/v1"
+
+    with patch("aiohttp.ClientSession", MockSession), patch(
+        "mlb.ingestion.lineups.get_config", return_value=MockConfig()
+    ):
+        rows = await lineup_provider.fetch_lineup("test_game_ac8", team_id=147)
+
+    # Should return empty list on timeout
+    assert rows == []
+
+
+@pytest.mark.asyncio
+async def test_lineup_invalid_batting_order():
+    """
+    AC9: Invalid batting_order.
+    Mock player with battingOrder="1000". Assert: player skipped, logs warning.
+    """
+    lineup_provider = V1LineupProvider()
+
+    # Mock response with invalid batting_order
+    mock_response = {
+        "teams": {
+            "home": {
+                "team": {"id": 147},
+                "players": {
+                    "ID12345": {
+                        "person": {"id": 12345, "fullName": "Aaron Judge"},
+                        "position": {"abbreviation": "RF"},
+                        "battingOrder": "100",  # Valid
+                    },
+                    "ID12346": {
+                        "person": {"id": 12346, "fullName": "Pinch Hitter"},
+                        "position": {"abbreviation": "PH"},
+                        "battingOrder": "1000",  # Invalid (out of range)
+                    },
+                },
+                "battingOrder": [12345],  # Only valid player in array
+            }
+        },
+        "status": {"abstractGameCode": "P"},
+    }
+
+    class MockResponse:
+        async def json(self):
+            return mock_response
+
+        def raise_for_status(self):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc_val, exc_tb):
+            pass
+
+    class MockSession:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def get(self, url, params=None):
+            return MockResponse()
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc_val, exc_tb):
+            pass
+
+    class MockConfig:
+        mlb_stats_api_base_url = "https://statsapi.mlb.com/api/v1"
+
+    with patch("aiohttp.ClientSession", MockSession), patch(
+        "mlb.ingestion.lineups.get_config", return_value=MockConfig()
+    ), patch("mlb.ingestion.lineups.V1LineupProvider._persist_lineups", new_callable=AsyncMock):
+        rows = await lineup_provider.fetch_lineup("test_game_ac9", team_id=147)
+
+    # Verify: only valid player returned (invalid batting_order skipped)
+    assert len(rows) == 1
+    assert rows[0].player_id == 12345
+    assert rows[0].batting_order == 1
+
+
+@pytest.mark.asyncio
+async def test_lineup_transaction_rollback():
+    """
+    AC10: Transaction rollback.
+    Mock DB error during lineup insert. Assert: exception caught internally, no partial writes.
+    """
+    pool = await get_pool()
+
+    try:
+        # Setup: Create test game
+        async with pool.acquire() as conn:
+            teams = await conn.fetch("SELECT team_id FROM teams LIMIT 2")
+            park = await conn.fetchval("SELECT park_id FROM parks LIMIT 1")
+
+            home_team_id = teams[0]["team_id"]
+            away_team_id = teams[1]["team_id"]
+
+            await conn.execute(
+                """
+                INSERT INTO games (game_id, game_date, home_team_id, away_team_id, park_id, status)
+                VALUES ('test_game_ac10', '2026-02-14', $1, $2, $3, 'scheduled')
+                ON CONFLICT (game_id) DO NOTHING
+                """,
+                home_team_id,
+                away_team_id,
+                park,
+            )
+
+        # Create lineup with invalid data that will cause DB error
+        lineup = [
+            LineupRow(
+                game_id="test_game_ac10",
+                team_id=home_team_id,
+                player_id=60000,
+                batting_order=1,
+                is_confirmed=True,
+                source_ts=datetime(2026, 2, 14, 10, 0, 0, tzinfo=timezone.utc),
+            )
+        ]
+
+        lineup_provider = V1LineupProvider()
+
+        # Mock get_pool to return a pool that will fail on executemany
+        class MockConnection:
+            def __init__(self, real_conn):
+                self._real_conn = real_conn
+
+            async def execute(self, *args, **kwargs):
+                return await self._real_conn.execute(*args, **kwargs)
+
+            async def executemany(self, sql, *args, **kwargs):
+                # Fail on lineup insert
+                if "INSERT INTO lineups" in sql:
+                    raise asyncpg.PostgresError("Simulated database error")
+                return await self._real_conn.executemany(sql, *args, **kwargs)
+
+            def transaction(self):
+                return self._real_conn.transaction()
+
+            async def __aenter__(self):
+                await self._real_conn.__aenter__()
+                return self
+
+            async def __aexit__(self, *args):
+                return await self._real_conn.__aexit__(*args)
+
+        class MockPool:
+            def __init__(self, real_pool):
+                self._real_pool = real_pool
+
+            def acquire(self):
+                class AcquireContext:
+                    def __init__(self, pool):
+                        self.pool = pool
+
+                    async def __aenter__(self):
+                        conn = await self.pool._real_pool.acquire().__aenter__()
+                        return MockConnection(conn)
+
+                    async def __aexit__(self, *args):
+                        pass
+
+                return AcquireContext(self)
+
+        async def mock_get_pool():
+            real_pool = await get_pool()
+            return MockPool(real_pool)
+
+        # Patch get_pool in lineups module
+        with patch("mlb.ingestion.lineups.get_pool", mock_get_pool):
+            # This should catch the error internally and not raise
+            await lineup_provider._persist_lineups(lineup)
+
+        # Verify: No lineup rows inserted (transaction rolled back)
+        async with pool.acquire() as conn:
+            lineup_count = await conn.fetchval(
+                "SELECT COUNT(*) FROM lineups WHERE game_id = 'test_game_ac10'"
+            )
+            assert lineup_count == 0
+
+        # Verify: Player was upserted before error (D-020)
+        async with pool.acquire() as conn:
+            player_count = await conn.fetchval(
+                "SELECT COUNT(*) FROM players WHERE player_id = 60000"
+            )
+            # Player should NOT exist because transaction rolled back
+            assert player_count == 0
+
+    finally:
+        # Cleanup
+        async with pool.acquire() as conn:
+            await conn.execute("DELETE FROM lineups WHERE game_id = 'test_game_ac10'")
+            await conn.execute("DELETE FROM players WHERE player_id = 60000")
+            await conn.execute("DELETE FROM games WHERE game_id = 'test_game_ac10'")
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
