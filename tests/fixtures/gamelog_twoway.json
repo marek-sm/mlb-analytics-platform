@@ -1,0 +1,61 @@
+{
+  "hitting": {
+    "stats": [
+      {
+        "type": {
+          "displayName": "gameLog"
+        },
+        "group": {
+          "displayName": "hitting"
+        },
+        "splits": [
+          {
+            "season": "2024",
+            "stat": {
+              "plateAppearances": 4,
+              "atBats": 4,
+              "hits": 2,
+              "totalBases": 4,
+              "homeRuns": 0,
+              "rbi": 1,
+              "runs": 1,
+              "baseOnBalls": 0,
+              "strikeOuts": 2
+            },
+            "game": {
+              "gamePk": 746999,
+              "date": "2024-06-20"
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "pitching": {
+    "stats": [
+      {
+        "type": {
+          "displayName": "gameLog"
+        },
+        "group": {
+          "displayName": "pitching"
+        },
+        "splits": [
+          {
+            "season": "2024",
+            "stat": {
+              "inningsPitched": "6.0",
+              "earnedRuns": 2,
+              "strikeOuts": 9,
+              "pitchesThrown": 95
+            },
+            "game": {
+              "gamePk": 746999,
+              "date": "2024-06-20"
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

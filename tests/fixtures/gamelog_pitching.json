@@ -1,0 +1,37 @@
+{
+  "stats": [
+    {
+      "type": {
+        "displayName": "gameLog"
+      },
+      "group": {
+        "displayName": "pitching"
+      },
+      "splits": [
+        {
+          "season": "2024",
+          "stat": {
+            "inningsPitched": "5.2",
+            "earnedRuns": 3,
+            "strikeOuts": 7,
+            "pitchesThrown": 87
+          },
+          "team": {
+            "id": 133,
+            "name": "Oakland Athletics"
+          },
+          "player": {
+            "id": 660271,
+            "fullName": "Shohei Ohtani"
+          },
+          "game": {
+            "gamePk": 746587,
+            "gameType": "R",
+            "season": "2024",
+            "date": "2024-06-15"
+          }
+        }
+      ]
+    }
+  ]
+}

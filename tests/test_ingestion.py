@@ -2509,5 +2509,639 @@ async def test_lineup_transaction_rollback():
             await conn.execute("DELETE FROM games WHERE game_id = 'test_game_ac10'")
 
 
+# ============================================================================
+# Step 1D: Player Stats / Game Logs Ingestion Tests
+# ============================================================================
+
+
+def test_parse_hitting_stats():
+    """
+    AC1: Parse hitting stats.
+    Mock hitting API response. Assert pa, ab, h, tb, hr, rbi, r, bb, k populated; pitching fields None.
+    """
+    import json
+    from pathlib import Path
+
+    from mlb.ingestion.stats import V1StatsProvider
+
+    # Load fixture
+    fixture_path = Path(__file__).parent / "fixtures" / "gamelog_hitting.json"
+    with open(fixture_path) as f:
+        hitting_data = json.load(f)
+
+    provider = V1StatsProvider()
+    logs_dict: dict[tuple[int, str], GameLogRow] = {}
+
+    # Process hitting splits
+    asyncio.run(
+        provider._process_hitting_splits(hitting_data, 660271, ["746587"], logs_dict)
+    )
+
+    # Verify single log row created
+    assert len(logs_dict) == 1
+    log = logs_dict[(660271, "746587")]
+
+    # Verify hitting fields populated
+    assert log.player_id == 660271
+    assert log.game_id == "746587"
+    assert log.pa == 4
+    assert log.ab == 3
+    assert log.h == 2
+    assert log.tb == 5
+    assert log.hr == 1
+    assert log.rbi == 2
+    assert log.r == 1
+    assert log.bb == 1
+    assert log.k == 1
+
+    # Verify pitching fields None
+    assert log.ip_outs is None
+    assert log.er is None
+    assert log.pitch_count is None
+    assert log.is_starter is None
+
+
+def test_parse_pitching_stats():
+    """
+    AC2: Parse pitching stats.
+    Mock pitching API response. Assert ip_outs, er, pitch_count, is_starter populated; hitting fields None.
+    """
+    import json
+    from pathlib import Path
+
+    from mlb.ingestion.stats import V1StatsProvider
+
+    # Load fixture
+    fixture_path = Path(__file__).parent / "fixtures" / "gamelog_pitching.json"
+    with open(fixture_path) as f:
+        pitching_data = json.load(f)
+
+    provider = V1StatsProvider()
+    logs_dict: dict[tuple[int, str], GameLogRow] = {}
+
+    # Process pitching splits
+    asyncio.run(
+        provider._process_pitching_splits(pitching_data, 660271, ["746587"], logs_dict)
+    )
+
+    # Verify single log row created
+    assert len(logs_dict) == 1
+    log = logs_dict[(660271, "746587")]
+
+    # Verify pitching fields populated
+    assert log.player_id == 660271
+    assert log.game_id == "746587"
+    assert log.ip_outs == 17  # 5.2 IP = 5*3 + 2 = 17 outs
+    assert log.er == 3
+    assert log.pitch_count == 87
+    assert log.is_starter is True  # >= 9 outs
+
+    # Verify hitting fields None (k is batter K per schema, not pitcher K)
+    assert log.pa is None
+    assert log.ab is None
+    assert log.h is None
+    assert log.tb is None
+    assert log.hr is None
+    assert log.rbi is None
+    assert log.r is None
+    assert log.bb is None
+    assert log.k is None  # k is batter strikeouts, not populated for pitcher-only logs
+
+
+def test_innings_conversion():
+    """
+    AC3: Innings conversion.
+    Test parse_ip_to_outs(): "0.1"→1, "0.2"→2, "5.0"→15, "5.2"→17, "6"→18, None→None.
+    Invalid "5.3"→None + WARNING logged.
+    """
+    from mlb.ingestion.stats import parse_ip_to_outs
+
+    # Valid formats
+    assert parse_ip_to_outs("0.1") == 1
+    assert parse_ip_to_outs("0.2") == 2
+    assert parse_ip_to_outs("5.0") == 15
+    assert parse_ip_to_outs("5.2") == 17
+    assert parse_ip_to_outs("6") == 18
+    assert parse_ip_to_outs("6.0") == 18
+    assert parse_ip_to_outs("7.1") == 22
+    assert parse_ip_to_outs(None) is None
+    assert parse_ip_to_outs("") is None
+
+    # Invalid format (partial_outs not in {0, 1, 2})
+    assert parse_ip_to_outs("5.3") is None  # Should log WARNING
+
+
+def test_starter_detection():
+    """
+    AC4: Starter detection.
+    Test detect_starter(): 18 outs→True, 9 outs→True, 8 outs→False, None→None.
+    """
+    from mlb.ingestion.stats import detect_starter
+
+    # Starters (>= 9 outs = 3+ innings)
+    assert detect_starter(18) is True  # 6 IP
+    assert detect_starter(9) is True  # 3 IP
+    assert detect_starter(15) is True  # 5 IP
+    assert detect_starter(27) is True  # 9 IP (complete game)
+
+    # Relievers (< 9 outs = < 3 IP)
+    assert detect_starter(8) is False  # 2.2 IP
+    assert detect_starter(6) is False  # 2 IP
+    assert detect_starter(3) is False  # 1 IP
+    assert detect_starter(1) is False  # 0.1 IP
+
+    # Non-pitcher
+    assert detect_starter(None) is None
+
+
+def test_twoway_player_merge():
+    """
+    AC5: Two-way player merge.
+    Mock player with both hitting and pitching splits for same game.
+    Assert single row with both stat sets populated.
+    """
+    import json
+    from pathlib import Path
+
+    from mlb.ingestion.stats import V1StatsProvider
+
+    # Load fixture
+    fixture_path = Path(__file__).parent / "fixtures" / "gamelog_twoway.json"
+    with open(fixture_path) as f:
+        fixture_data = json.load(f)
+
+    provider = V1StatsProvider()
+    logs_dict: dict[tuple[int, str], GameLogRow] = {}
+
+    # Process hitting then pitching (simulating two-way player)
+    asyncio.run(
+        provider._process_hitting_splits(
+            fixture_data["hitting"], 660271, ["746999"], logs_dict
+        )
+    )
+    asyncio.run(
+        provider._process_pitching_splits(
+            fixture_data["pitching"], 660271, ["746999"], logs_dict
+        )
+    )
+
+    # Verify single log row with both stat sets
+    assert len(logs_dict) == 1
+    log = logs_dict[(660271, "746999")]
+
+    # Verify hitting stats
+    assert log.pa == 4
+    assert log.ab == 4
+    assert log.h == 2
+    assert log.hr == 0
+
+    # Verify pitching stats
+    assert log.ip_outs == 18  # 6.0 IP
+    assert log.er == 2
+    assert log.pitch_count == 95
+    assert log.is_starter is True
+
+
+@pytest.mark.asyncio
+async def test_gamelog_upsert_conflict():
+    """
+    AC6: UPSERT conflict.
+    Insert log, then re-insert with updated hr count.
+    Assert single row exists with new hr value, same log_id.
+    """
+    pool = await get_pool()
+    stats_provider = V1StatsProvider()
+
+    try:
+        # Setup: Create test game and player
+        async with pool.acquire() as conn:
+            teams = await conn.fetch("SELECT team_id FROM teams LIMIT 2")
+            park = await conn.fetchval("SELECT park_id FROM parks LIMIT 1")
+
+            home_team_id = teams[0]["team_id"]
+            away_team_id = teams[1]["team_id"]
+
+            await conn.execute(
+                """
+                INSERT INTO games (game_id, game_date, home_team_id, away_team_id, park_id, status)
+                VALUES ('test_game_stats_1', '2026-02-14', $1, $2, $3, 'final')
+                ON CONFLICT (game_id) DO NOTHING
+                """,
+                home_team_id,
+                away_team_id,
+                park,
+            )
+
+            # Ensure player exists
+            await conn.execute(
+                """
+                INSERT INTO players (player_id, name)
+                VALUES (70000, 'Test Player')
+                ON CONFLICT (player_id) DO NOTHING
+                """
+            )
+
+        # Insert initial log
+        initial_log = GameLogRow(
+            player_id=70000,
+            game_id="test_game_stats_1",
+            pa=4,
+            ab=4,
+            h=2,
+            tb=5,
+            hr=1,
+            rbi=2,
+            r=1,
+            bb=0,
+            k=1,
+        )
+        await stats_provider.write_game_logs([initial_log])
+
+        # Get log_id
+        async with pool.acquire() as conn:
+            initial_row = await conn.fetchrow(
+                "SELECT log_id, hr FROM player_game_logs WHERE player_id = 70000 AND game_id = 'test_game_stats_1'"
+            )
+            assert initial_row is not None
+            assert initial_row["hr"] == 1
+            log_id = initial_row["log_id"]
+
+        # Re-insert with updated hr count
+        updated_log = GameLogRow(
+            player_id=70000,
+            game_id="test_game_stats_1",
+            pa=4,
+            ab=4,
+            h=2,
+            tb=8,  # Updated
+            hr=2,  # Updated
+            rbi=3,  # Updated
+            r=1,
+            bb=0,
+            k=1,
+        )
+        await stats_provider.write_game_logs([updated_log])
+
+        # Verify: single row with new values, same log_id
+        async with pool.acquire() as conn:
+            count = await conn.fetchval(
+                "SELECT COUNT(*) FROM player_game_logs WHERE player_id = 70000 AND game_id = 'test_game_stats_1'"
+            )
+            assert count == 1
+
+            updated_row = await conn.fetchrow(
+                "SELECT log_id, hr, tb, rbi FROM player_game_logs WHERE player_id = 70000 AND game_id = 'test_game_stats_1'"
+            )
+            assert updated_row["log_id"] == log_id  # Same log_id
+            assert updated_row["hr"] == 2  # Updated
+            assert updated_row["tb"] == 8  # Updated
+            assert updated_row["rbi"] == 3  # Updated
+
+    finally:
+        # Cleanup
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "DELETE FROM player_game_logs WHERE player_id = 70000"
+            )
+            await conn.execute("DELETE FROM players WHERE player_id = 70000")
+            await conn.execute("DELETE FROM games WHERE game_id = 'test_game_stats_1'")
+
+
+@pytest.mark.asyncio
+async def test_gamelog_d020_player_upsert():
+    """
+    AC7: D-020 player upsert.
+    Mock log for player_id not in players table.
+    Assert player inserted, game log inserted without FK error.
+    """
+    pool = await get_pool()
+    stats_provider = V1StatsProvider()
+
+    try:
+        # Setup: Create test game
+        async with pool.acquire() as conn:
+            teams = await conn.fetch("SELECT team_id FROM teams LIMIT 2")
+            park = await conn.fetchval("SELECT park_id FROM parks LIMIT 1")
+
+            home_team_id = teams[0]["team_id"]
+            away_team_id = teams[1]["team_id"]
+
+            await conn.execute(
+                """
+                INSERT INTO games (game_id, game_date, home_team_id, away_team_id, park_id, status)
+                VALUES ('test_game_stats_2', '2026-02-14', $1, $2, $3, 'final')
+                ON CONFLICT (game_id) DO NOTHING
+                """,
+                home_team_id,
+                away_team_id,
+                park,
+            )
+
+        # Delete player if exists
+        async with pool.acquire() as conn:
+            await conn.execute("DELETE FROM players WHERE player_id = 70001")
+
+        # Verify player does not exist
+        async with pool.acquire() as conn:
+            player_count = await conn.fetchval(
+                "SELECT COUNT(*) FROM players WHERE player_id = 70001"
+            )
+            assert player_count == 0
+
+        # Write log for unknown player
+        log = GameLogRow(
+            player_id=70001,
+            game_id="test_game_stats_2",
+            pa=3,
+            ab=3,
+            h=1,
+            tb=4,
+            hr=1,
+        )
+        await stats_provider.write_game_logs([log])
+
+        # Verify player was auto-created
+        async with pool.acquire() as conn:
+            player_row = await conn.fetchrow(
+                "SELECT player_id, name FROM players WHERE player_id = 70001"
+            )
+            assert player_row is not None
+            assert player_row["player_id"] == 70001
+
+        # Verify game log was inserted
+        async with pool.acquire() as conn:
+            log_count = await conn.fetchval(
+                "SELECT COUNT(*) FROM player_game_logs WHERE player_id = 70001 AND game_id = 'test_game_stats_2'"
+            )
+            assert log_count == 1
+
+    finally:
+        # Cleanup
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "DELETE FROM player_game_logs WHERE player_id = 70001"
+            )
+            await conn.execute("DELETE FROM players WHERE player_id = 70001")
+            await conn.execute("DELETE FROM games WHERE game_id = 'test_game_stats_2'")
+
+
+def test_gamelog_missing_fields():
+    """
+    AC8: Missing fields.
+    Mock response with plateAppearances but no atBats.
+    Assert pa populated, ab is None.
+    """
+    import json
+
+    from mlb.ingestion.stats import V1StatsProvider
+
+    # Mock response with partial data
+    mock_data = {
+        "stats": [
+            {
+                "splits": [
+                    {
+                        "stat": {
+                            "plateAppearances": 4,
+                            # atBats missing
+                            "hits": 2,
+                        },
+                        "game": {"gamePk": 999999},
+                    }
+                ]
+            }
+        ]
+    }
+
+    provider = V1StatsProvider()
+    logs_dict: dict[tuple[int, str], GameLogRow] = {}
+
+    asyncio.run(provider._process_hitting_splits(mock_data, 99999, ["999999"], logs_dict))
+
+    # Verify pa populated, ab is None
+    log = logs_dict[(99999, "999999")]
+    assert log.pa == 4
+    assert log.ab is None  # Missing from API
+    assert log.h == 2
+
+
+@pytest.mark.asyncio
+async def test_gamelog_api_timeout():
+    """
+    AC9: API timeout.
+    Mock timeout. Assert returns [], WARNING logged.
+    """
+    from mlb.ingestion.stats import V1StatsProvider
+
+    stats_provider = V1StatsProvider()
+
+    # Mock aiohttp timeout
+    class MockSession:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def get(self, url, **kwargs):
+            raise asyncio.TimeoutError("API timeout")
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc_val, exc_tb):
+            pass
+
+    # Mock pool with empty data
+    class MockConnection:
+        async def fetch(self, query, *args):
+            if "FROM games" in query:
+                return [{"game_id": "test_game"}]
+            elif "FROM lineups" in query:
+                return [{"player_id": 12345}]
+            return []
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc_val, exc_tb):
+            pass
+
+    class MockPool:
+        def acquire(self):
+            return MockConnection()
+
+    async def mock_get_pool():
+        return MockPool()
+
+    with patch("aiohttp.ClientSession", MockSession), patch(
+        "mlb.ingestion.stats.get_pool", mock_get_pool
+    ):
+        rows = await stats_provider.fetch_game_logs(date(2026, 2, 14))
+
+    # Should return empty list on timeout
+    assert rows == []
+
+
+@pytest.mark.asyncio
+async def test_gamelog_empty_lineups():
+    """
+    AC10: Empty lineups.
+    Query for date with no lineups data. Assert returns [], INFO logged (not error).
+    """
+    from mlb.ingestion.stats import V1StatsProvider
+
+    stats_provider = V1StatsProvider()
+
+    # Mock pool with game but no lineups
+    class MockConnection:
+        async def fetch(self, query, *args):
+            if "FROM games" in query:
+                # Return completed game
+                return [{"game_id": "test_game_no_lineup"}]
+            elif "FROM lineups" in query:
+                # No lineups for this game
+                return []
+            return []
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc_val, exc_tb):
+            pass
+
+    class MockPool:
+        def acquire(self):
+            return MockConnection()
+
+    async def mock_get_pool():
+        return MockPool()
+
+    with patch("mlb.ingestion.stats.get_pool", mock_get_pool):
+        rows = await stats_provider.fetch_game_logs(date(2026, 2, 14))
+
+    # Should return empty list when no lineups found
+    assert rows == []
+
+
+@pytest.mark.asyncio
+async def test_fetch_game_logs_caches_season_logs():
+    """
+    FC-33: Request-level caching for game logs.
+    Call fetch_game_logs() twice for same date within cache TTL.
+    Assert: only 1 HTTP request made (second call hits cache).
+    """
+    import json
+    from pathlib import Path
+
+    from mlb.ingestion.cache import get_cache
+    from mlb.ingestion.stats import V1StatsProvider
+
+    stats_provider = V1StatsProvider()
+
+    # Clear cache before test
+    cache = get_cache()
+    cache.clear()
+
+    # Load fixture for mock response
+    fixture_path = Path(__file__).parent / "fixtures" / "gamelog_hitting.json"
+    with open(fixture_path) as f:
+        mock_response_data = json.load(f)
+    mock_response_bytes = json.dumps(mock_response_data).encode("utf-8")
+
+    # Track HTTP call count
+    http_call_count = {"hitting": 0, "pitching": 0}
+
+    class MockResponse:
+        def __init__(self, data_bytes):
+            self.status = 200
+            self._data = data_bytes
+
+        async def read(self):
+            return self._data
+
+        async def json(self):
+            return json.loads(self._data.decode("utf-8"))
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc_val, exc_tb):
+            pass
+
+    class MockSession:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def get(self, url, **kwargs):
+            # Track which endpoint was called
+            if "group=hitting" in url:
+                http_call_count["hitting"] += 1
+                return MockResponse(mock_response_bytes)
+            elif "group=pitching" in url:
+                http_call_count["pitching"] += 1
+                # Return empty stats for pitching (player doesn't pitch)
+                empty_response = {"stats": []}
+                return MockResponse(json.dumps(empty_response).encode("utf-8"))
+            return MockResponse(b"{}")
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc_val, exc_tb):
+            pass
+
+    # Mock pool with game and lineup data
+    class MockConnection:
+        async def fetch(self, query, *args):
+            if "FROM games" in query:
+                # Return completed game
+                return [{"game_id": "746587"}]
+            elif "FROM lineups" in query:
+                # Return single player
+                return [{"player_id": 660271}]
+            return []
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc_val, exc_tb):
+            pass
+
+    class MockPool:
+        def acquire(self):
+            return MockConnection()
+
+    async def mock_get_pool():
+        return MockPool()
+
+    with patch("aiohttp.ClientSession", MockSession), patch(
+        "mlb.ingestion.stats.get_pool", mock_get_pool
+    ):
+        # First call - should make HTTP requests
+        rows1 = await stats_provider.fetch_game_logs(date(2024, 6, 15))
+        assert len(rows1) == 1
+
+        # Second call - should use cache (no additional HTTP requests)
+        rows2 = await stats_provider.fetch_game_logs(date(2024, 6, 15))
+        assert len(rows2) == 1
+
+    # Verify: only 1 HTTP call per endpoint (hitting + pitching)
+    assert http_call_count["hitting"] == 1, "Expected 1 hitting HTTP call, got " + str(
+        http_call_count["hitting"]
+    )
+    assert http_call_count["pitching"] == 1, "Expected 1 pitching HTTP call, got " + str(
+        http_call_count["pitching"]
+    )
+
+    # Verify cache contains the expected keys
+    cache_key_hitting = "gamelog:660271:2024:hitting"
+    cache_key_pitching = "gamelog:660271:2024:pitching"
+    assert cache.get(cache_key_hitting) is not None, "Cache should contain hitting data"
+    assert (
+        cache.get(cache_key_pitching) is not None
+    ), "Cache should contain pitching data"
+
+    # Cleanup
+    cache.clear()
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

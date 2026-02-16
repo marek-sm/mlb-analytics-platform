@@ -1,0 +1,42 @@
+{
+  "stats": [
+    {
+      "type": {
+        "displayName": "gameLog"
+      },
+      "group": {
+        "displayName": "hitting"
+      },
+      "splits": [
+        {
+          "season": "2024",
+          "stat": {
+            "plateAppearances": 4,
+            "atBats": 3,
+            "hits": 2,
+            "totalBases": 5,
+            "homeRuns": 1,
+            "rbi": 2,
+            "runs": 1,
+            "baseOnBalls": 1,
+            "strikeOuts": 1
+          },
+          "team": {
+            "id": 133,
+            "name": "Oakland Athletics"
+          },
+          "player": {
+            "id": 660271,
+            "fullName": "Shohei Ohtani"
+          },
+          "game": {
+            "gamePk": 746587,
+            "gameType": "R",
+            "season": "2024",
+            "date": "2024-06-15"
+          }
+        }
+      ]
+    }
+  ]
+}

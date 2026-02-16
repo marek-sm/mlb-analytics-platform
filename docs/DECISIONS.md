@@ -511,3 +511,9 @@ This document tracks all architectural and implementation decisions made through
 **Decision**: MLB Stats API boxscore is v1 lineup provider. Endpoint: `GET /api/v1/game/{gamePk}/boxscore`. Confirmation: `is_confirmed=TRUE` if status is Live/Final (`L`/`F`) OR Preview/Scheduled (`P`/`S`) with exactly 9 players (not 9+, to avoid confirming placeholder lineups). Batting order from `battingOrder` field ("100"–"900" → 1–9); fallback to `battingOrder` array. Players with `battingOrder="0"` or outside [1,9] skipped. Unknown players upserted per D-020. Prior confirmed rows flipped per D-011. Lineups are append-only (versioned via `source_ts`); no ON CONFLICT on insert. Timeout 10s, `[]` on failure per D-019. No API key required.
 
 ---
+
+### D-058: MLB Stats API people/stats is v1 game logs provider.
+
+**Decision**: MLB Stats API people/stats is v1 game logs provider. Endpoints: `/api/v1/people/{playerId}/stats?stats=gameLog&group={hitting|pitching}&season={YYYY}`. Innings conversion: `full_innings × 3 + partial_outs`; invalid formats (e.g., "5.3") → None + WARNING. Starter heuristic: `ip_outs >= 9` (3+ innings). Two-way players: merge hitting + pitching into single row per `(player_id, game_id)`. UPSERT on `(player_id, game_id)` with DO UPDATE for stats corrections; `created_at` not updated on conflict. Fetch orchestration: query `games` for completed games on date, query `lineups` for player list, fetch season logs for each player, filter to target games. Unknown players upserted per D-020 before inserting logs. Empty lineups → `[]` + INFO log (not error). Timeout 10s, `[]` on failure per D-019. No API key required.
+
+---

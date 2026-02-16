@@ -95,3 +95,110 @@ docs/
 ---
 
 *End of Step 1C Implementation Log*
+
+---
+
+## Step 1D: Player Stats / Game Logs Ingestion
+
+**Date:** 2026-02-15
+**Status:** ✅ Implemented
+**Branch:** main
+
+### What Shipped
+
+Implemented Step 1D per mini-spec: player game logs ingestion via MLB Stats API. Replaced `V1StatsProvider.fetch_game_logs()` stub with full implementation.
+
+**Core Features:**
+1. **Fetch hitting + pitching logs** from MLB Stats API `/people/{playerId}/stats` endpoints
+2. **Innings conversion**: Parse "5.2" format to 17 outs (5 × 3 + 2)
+3. **Starter detection**: v1 heuristic `ip_outs >= 9` (3+ innings)
+4. **Two-way player merge**: Single `GameLogRow` per player per game with both hitting and pitching stats
+5. **UPSERT on conflict**: `(player_id, game_id)` with DO UPDATE for stats corrections
+6. **D-020 player upsert**: Unknown players auto-created before inserting logs
+7. **Orchestration**: Query completed games → query lineups for players → fetch season logs → filter to target games
+8. **Conservative fallback**: Return `[]` on API timeout/error with WARNING log (D-019)
+
+### Tests Added
+
+Added 10 test functions in `test_ingestion.py` covering all acceptance criteria:
+
+1. `test_parse_hitting_stats`: Parse hitting API response, verify all hitting fields populated
+2. `test_parse_pitching_stats`: Parse pitching API response, verify all pitching fields and innings conversion
+3. `test_innings_conversion`: Test `parse_ip_to_outs()` with valid/invalid formats
+4. `test_starter_detection`: Test `detect_starter()` heuristic (>= 9 outs = starter)
+5. `test_twoway_player_merge`: Merge hitting + pitching splits into single row
+6. `test_gamelog_upsert_conflict`: UPSERT updates existing row on conflict
+7. `test_gamelog_d020_player_upsert`: Unknown player auto-created before log insert
+8. `test_gamelog_missing_fields`: Handle partial API responses (missing fields → None)
+9. `test_gamelog_api_timeout`: Timeout returns `[]` with WARNING
+10. `test_gamelog_empty_lineups`: No lineups for date returns `[]` with INFO (not error)
+
+All tests use mock API responses with fixtures:
+- `gamelog_hitting.json`: Hitting stats for Ohtani
+- `gamelog_pitching.json`: Pitching stats for Ohtani
+- `gamelog_twoway.json`: Combined hitting + pitching for same game
+
+### Known Limitations
+
+1. **v1 starter heuristic is approximate**: `ip_outs >= 9` misclassifies:
+   - 2-inning openers as non-starters
+   - Long relievers (4+ IP) as starters
+   - Injury/rain-shortened starts (< 3 IP) as relievers
+   - **v2 improvement**: Use boxscore pitching appearance order or `gameType` field
+
+2. **Season-wide API calls**: Fetches entire season game logs per player, filters to target games client-side. MLB API doesn't support date range filtering for game logs.
+
+3. **No historical backfill orchestration**: Daily batch execution only. High-volume multi-day backfill requires separate script.
+
+4. **Prerequisite assumption**: Step 1C (lineups) must run before Step 1D. If lineups table is empty for date, returns `[]` + INFO log.
+
+5. **No response caching**: Each player requires 2 HTTP calls (hitting + pitching). ~540 calls for typical 15-game slate. Acceptable for v1; consider caching in v2.
+
+### What's Next
+
+**Immediate Dependencies (Unlocked by Step 1D):**
+- **Unit 4 (Features)**: Can now compute rolling player stats (wOBA, K/BF, etc.) from `player_game_logs` table
+- **Unit 5 (Models)**: Batter and pitcher models can use historical game logs for shrinkage and projections
+- **Unit 6 (Simulation)**: Monte Carlo engine can sample from player stat distributions
+
+**Next Steps:**
+- **Step 1E (Weather)**: Wire weather provider to external API (currently stub)
+- **Unit 4 Feature Engineering**: Implement player-level feature pipelines using `player_game_logs`
+- **Unit 5 Player Models**: Build batter/pitcher models with shrinkage
+
+### Files Modified
+
+```
+src/mlb/
+  ingestion/
+    stats.py            # Replaced fetch_game_logs() stub; added parse_ip_to_outs(), detect_starter()
+tests/
+  test_ingestion.py     # Added 10 test functions (AC1-AC10)
+  fixtures/             # Created 3 JSON fixtures
+    gamelog_hitting.json
+    gamelog_pitching.json
+    gamelog_twoway.json
+docs/
+  DECISIONS.md          # Appended D-058
+  DEVLOG.md             # This entry
+```
+
+### Contract Summary
+
+**Input:** `fetch_game_logs(game_date: date)`
+**Output:** `list[GameLogRow]` with fields: `player_id`, `game_id`, hitting stats (pa, ab, h, tb, hr, rbi, r, bb, k), pitching stats (ip_outs, er, pitch_count, is_starter)
+**API:** 
+- `GET /api/v1/people/{playerId}/stats?stats=gameLog&group=hitting&season={YYYY}` (timeout: 10s)
+- `GET /api/v1/people/{playerId}/stats?stats=gameLog&group=pitching&season={YYYY}` (timeout: 10s)
+**Innings Format:** "5.2" → 17 outs; invalid formats → None + WARNING
+**Starter Heuristic:** `ip_outs >= 9` → `is_starter=True`
+**Two-Way Merge:** Single row per `(player_id, game_id)` with both stat sets
+**D-020 Upsert:** Unknown players auto-created before log insert
+**UPSERT Conflict:** `(player_id, game_id)` DO UPDATE; `created_at` not updated
+**Fallback:** `[]` on timeout/HTTP error/parse failure (with WARNING log per D-019)
+**Orchestration:** Query completed games → query lineups → fetch player logs → filter to target games
+**Persistence:** `write_game_logs()` handles batch upsert with executemany
+
+---
+
+*End of Step 1D Implementation Log*
