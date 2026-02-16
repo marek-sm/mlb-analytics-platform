@@ -2659,6 +2659,27 @@ def test_innings_conversion():
     assert parse_ip_to_outs("5.3") is None  # Should log WARNING
 
 
+def test_parse_ip_to_outs_handles_non_numeric():
+    """
+    FC-35: Non-numeric innings data handling.
+    Test parse_ip_to_outs() with malformed API data: "X.2", "5.X", "ERR".
+    Assert: returns None, logs WARNING (non-numeric).
+    """
+    from mlb.ingestion.stats import parse_ip_to_outs
+
+    # Non-numeric full innings
+    assert parse_ip_to_outs("X.2") is None  # Should log WARNING (non-numeric)
+    assert parse_ip_to_outs("ERR") is None  # Should log WARNING (non-numeric)
+    assert parse_ip_to_outs("ABC.1") is None  # Should log WARNING (non-numeric)
+
+    # Non-numeric partial outs
+    assert parse_ip_to_outs("5.X") is None  # Should log WARNING (non-numeric)
+    assert parse_ip_to_outs("3.Y") is None  # Should log WARNING (non-numeric)
+
+    # Both non-numeric
+    assert parse_ip_to_outs("X.Y") is None  # Should log WARNING (non-numeric)
+
+
 def test_starter_detection():
     """
     AC4: Starter detection.

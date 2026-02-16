@@ -42,13 +42,19 @@ def parse_ip_to_outs(ip_str: str | None) -> int | None:
         return None
 
     full, _, partial = ip_str.partition(".")
-    partial_outs = int(partial) if partial else 0
+
+    try:
+        full_innings = int(full)
+        partial_outs = int(partial) if partial else 0
+    except ValueError:
+        logger.warning(f"Invalid innings format (non-numeric): {ip_str}")
+        return None
 
     if partial_outs not in {0, 1, 2}:
         logger.warning(f"Invalid innings format: {ip_str}")
         return None
 
-    return int(full) * 3 + partial_outs
+    return full_innings * 3 + partial_outs
 
 
 def detect_starter(ip_outs: int | None) -> bool | None:
