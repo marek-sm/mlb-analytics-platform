@@ -3444,6 +3444,107 @@ async def test_fetch_game_logs_falls_back_to_lineups_if_boxscore_fails():
 
 
 @pytest.mark.asyncio
+async def test_fetch_game_logs_skips_non_final_games(caplog):
+    """
+    FC-37: Skip stats ingestion for non-final games.
+    Insert games with status='scheduled'. Assert: returns [], INFO log (not WARNING).
+    """
+    import logging
+
+    from mlb.ingestion.stats import V1StatsProvider
+
+    stats_provider = V1StatsProvider()
+
+    # Mock pool with scheduled game (not final)
+    class MockConnection:
+        async def fetch(self, query, *args):
+            if "FROM games" in query and "status = 'final'" in query:
+                # No final games (only scheduled games exist)
+                return []
+            return []
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc_val, exc_tb):
+            pass
+
+    class MockPool:
+        def acquire(self):
+            return MockConnection()
+
+    async def mock_get_pool():
+        return MockPool()
+
+    with patch("mlb.ingestion.stats.get_pool", mock_get_pool), caplog.at_level(
+        logging.INFO
+    ):
+        rows = await stats_provider.fetch_game_logs(date(2024, 6, 15))
+
+    # Verify: returns empty list
+    assert rows == []
+
+    # Verify: INFO log (not WARNING)
+    assert any("No completed games found" in record.message for record in caplog.records)
+    assert not any(
+        record.levelname == "WARNING" for record in caplog.records
+    ), "Should not log WARNING for non-final games"
+
+
+@pytest.mark.asyncio
+async def test_fetch_game_logs_warns_if_lineups_missing_for_final_games(caplog):
+    """
+    FC-37: Warn if lineups missing for final games.
+    Insert final games but no lineups. Assert: returns [], WARNING log.
+    """
+    import logging
+
+    from mlb.ingestion.stats import V1StatsProvider
+
+    stats_provider = V1StatsProvider()
+
+    # Mock pool with final games but no lineups
+    class MockConnection:
+        async def fetch(self, query, *args):
+            if "FROM games" in query and "status = 'final'" in query:
+                # Return final game
+                return [{"game_id": "746587"}]
+            elif "FROM lineups" in query:
+                # No lineups found (Step 1C failed)
+                return []
+            return []
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc_val, exc_tb):
+            pass
+
+    class MockPool:
+        def acquire(self):
+            return MockConnection()
+
+    async def mock_get_pool():
+        return MockPool()
+
+    with patch("mlb.ingestion.stats.get_pool", mock_get_pool), caplog.at_level(
+        logging.WARNING
+    ):
+        rows = await stats_provider.fetch_game_logs(date(2024, 6, 15))
+
+    # Verify: returns empty list
+    assert rows == []
+
+    # Verify: WARNING log about missing lineups
+    assert any(
+        "No lineups found for final games" in record.message
+        and "Step 1C may have failed" in record.message
+        for record in caplog.records
+        if record.levelname == "WARNING"
+    ), "Should log WARNING when lineups are missing for final games"
+
+
+@pytest.mark.asyncio
 async def test_step_1d_reuses_step_1c_boxscore_cache():
     """
     FC-34 / D-060: Verify Step 1D doesn't make redundant boxscore calls if Step 1C already cached data.

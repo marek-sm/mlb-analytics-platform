@@ -233,6 +233,13 @@ class V1StatsProvider(StatsProvider):
 
             lineup_player_ids = {row["player_id"] for row in lineups}
 
+            # If no lineups found for final games, this indicates Step 1C failed
+            if not lineup_player_ids:
+                logger.warning(
+                    f"No lineups found for final games on {game_date} (Step 1C may have failed)"
+                )
+                return []
+
             # Step 2b: Get ALL players who appeared in each game from boxscore
             # This includes relief pitchers, pinch hitters, substitutions
             all_player_ids = set(lineup_player_ids)
