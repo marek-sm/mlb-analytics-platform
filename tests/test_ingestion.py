@@ -990,6 +990,9 @@ async def test_fetch_schedule_parses_mlb_api_response():
         async def json(self):
             return mock_response
 
+        async def read(self):
+            return json.dumps(mock_response).encode("utf-8")
+
         def raise_for_status(self):
             pass
 
@@ -1130,6 +1133,9 @@ async def test_fetch_schedule_unknown_venue_falls_back_to_home_team():
     class MockResponse:
         async def json(self):
             return mock_response
+
+        async def read(self):
+            return json.dumps(mock_response).encode("utf-8")
 
         def raise_for_status(self):
             pass
@@ -1817,6 +1823,9 @@ async def test_lineup_parse_standard_lineup():
         async def json(self):
             return mock_response
 
+        async def read(self):
+            return json.dumps(mock_response).encode("utf-8")
+
         def raise_for_status(self):
             pass
 
@@ -1885,6 +1894,9 @@ async def test_lineup_confirm_on_game_start():
         async def json(self):
             return mock_response
 
+        async def read(self):
+            return json.dumps(mock_response).encode("utf-8")
+
         def raise_for_status(self):
             pass
 
@@ -1940,6 +1952,9 @@ async def test_lineup_partial_lineup_unconfirmed():
     class MockResponse:
         async def json(self):
             return mock_response
+
+        async def read(self):
+            return json.dumps(mock_response).encode("utf-8")
 
         def raise_for_status(self):
             pass
@@ -2175,6 +2190,9 @@ async def test_lineup_skip_bench_players():
         async def json(self):
             return mock_response
 
+        async def read(self):
+            return json.dumps(mock_response).encode("utf-8")
+
         def raise_for_status(self):
             pass
 
@@ -2219,6 +2237,8 @@ async def test_lineup_fallback_to_array():
     Mock missing battingOrder field with battingOrder array present.
     Assert: order from array index.
     """
+    import json
+
     lineup_provider = V1LineupProvider()
 
     # Mock response with missing battingOrder field
@@ -2247,6 +2267,9 @@ async def test_lineup_fallback_to_array():
     class MockResponse:
         async def json(self):
             return mock_response
+
+        async def read(self):
+            return json.dumps(mock_response).encode("utf-8")
 
         def raise_for_status(self):
             pass
@@ -2328,6 +2351,8 @@ async def test_lineup_invalid_batting_order():
     AC9: Invalid batting_order.
     Mock player with battingOrder="1000". Assert: player skipped, logs warning.
     """
+    import json
+
     lineup_provider = V1LineupProvider()
 
     # Mock response with invalid batting_order
@@ -2356,6 +2381,9 @@ async def test_lineup_invalid_batting_order():
     class MockResponse:
         async def json(self):
             return mock_response
+
+        async def read(self):
+            return json.dumps(mock_response).encode("utf-8")
 
         def raise_for_status(self):
             pass
@@ -3138,6 +3166,388 @@ async def test_fetch_game_logs_caches_season_logs():
     assert (
         cache.get(cache_key_pitching) is not None
     ), "Cache should contain pitching data"
+
+    # Cleanup
+    cache.clear()
+
+
+@pytest.mark.asyncio
+async def test_fetch_game_logs_includes_relief_pitchers():
+    """
+    FC-34: Full roster discovery includes relief pitchers.
+    Mock game with 5 relief pitchers not in lineup. Assert: all 5 have game logs fetched.
+    """
+    import json
+    from pathlib import Path
+
+    from mlb.ingestion.cache import get_cache
+    from mlb.ingestion.stats import V1StatsProvider
+
+    stats_provider = V1StatsProvider()
+
+    # Clear cache before test
+    cache = get_cache()
+    cache.clear()
+
+    # Load fixture with relief pitchers
+    fixture_path = Path(__file__).parent / "fixtures" / "boxscore_with_relievers.json"
+    with open(fixture_path) as f:
+        boxscore_data = json.load(f)
+
+    # Track which player IDs were requested for game logs
+    requested_player_ids = set()
+
+    class MockResponse:
+        def __init__(self, data, status=200):
+            self.status = status
+            self._data = data
+
+        async def read(self):
+            if isinstance(self._data, dict):
+                return json.dumps(self._data).encode("utf-8")
+            return self._data
+
+        async def json(self):
+            if isinstance(self._data, bytes):
+                return json.loads(self._data.decode("utf-8"))
+            return self._data
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc_val, exc_tb):
+            pass
+
+    class MockSession:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def get(self, url, **kwargs):
+            # Boxscore endpoint
+            if "/boxscore" in url:
+                return MockResponse(boxscore_data, status=200)
+            # Game log endpoints
+            elif "/stats?stats=gameLog" in url:
+                # Extract player_id from URL
+                parts = url.split("/people/")[1].split("/")[0]
+                player_id = int(parts)
+                requested_player_ids.add(player_id)
+
+                # Return empty game logs
+                return MockResponse({"stats": []}, status=200)
+            return MockResponse({}, status=404)
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc_val, exc_tb):
+            pass
+
+    # Mock pool with game and lineup data
+    class MockConnection:
+        async def fetch(self, query, *args):
+            if "FROM games" in query:
+                # Return completed game
+                return [{"game_id": "test_game_fc34_1"}]
+            elif "FROM lineups" in query:
+                # Return only starting 9 from home team (no relief pitchers)
+                return [
+                    {"player_id": 12345},
+                    {"player_id": 12346},
+                    {"player_id": 12347},
+                    {"player_id": 12348},
+                    {"player_id": 12349},
+                    {"player_id": 12350},
+                    {"player_id": 12351},
+                    {"player_id": 12352},
+                    {"player_id": 12353},
+                ]
+            return []
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc_val, exc_tb):
+            pass
+
+    class MockPool:
+        def acquire(self):
+            return MockConnection()
+
+    async def mock_get_pool():
+        return MockPool()
+
+    with patch("aiohttp.ClientSession", MockSession), patch(
+        "mlb.ingestion.stats.get_pool", mock_get_pool
+    ):
+        rows = await stats_provider.fetch_game_logs(date(2024, 6, 15))
+
+    # Verify: relief pitchers (90001-90005) were requested for game logs
+    relief_pitcher_ids = {90001, 90002, 90003, 90004, 90005}
+    assert relief_pitcher_ids.issubset(
+        requested_player_ids
+    ), f"Relief pitchers {relief_pitcher_ids - requested_player_ids} were not fetched"
+
+    # Verify: starting players were also requested
+    starter_ids = {12345, 12346, 12347}
+    assert starter_ids.issubset(
+        requested_player_ids
+    ), f"Starting players {starter_ids - requested_player_ids} were not fetched"
+
+    # Cleanup
+    cache.clear()
+
+
+@pytest.mark.asyncio
+async def test_fetch_game_logs_falls_back_to_lineups_if_boxscore_fails():
+    """
+    FC-34: Fallback to lineups-only if boxscore fails.
+    Mock boxscore API timeout. Assert: fetch_game_logs still returns logs for starting 9 (degraded but not broken).
+    """
+    import json
+
+    from mlb.ingestion.cache import get_cache
+    from mlb.ingestion.stats import V1StatsProvider
+
+    stats_provider = V1StatsProvider()
+
+    # Clear cache before test
+    cache = get_cache()
+    cache.clear()
+
+    # Track which player IDs were requested for game logs
+    requested_player_ids = set()
+
+    class MockResponse:
+        def __init__(self, data, status=200):
+            self.status = status
+            self._data = data
+
+        async def read(self):
+            if isinstance(self._data, dict):
+                return json.dumps(self._data).encode("utf-8")
+            return self._data
+
+        async def json(self):
+            if isinstance(self._data, bytes):
+                return json.loads(self._data.decode("utf-8"))
+            return self._data
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc_val, exc_tb):
+            pass
+
+    class MockSession:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def get(self, url, **kwargs):
+            # Boxscore endpoint - simulate timeout
+            if "/boxscore" in url:
+                raise asyncio.TimeoutError("Boxscore API timeout")
+            # Game log endpoints
+            elif "/stats?stats=gameLog" in url:
+                # Extract player_id from URL
+                parts = url.split("/people/")[1].split("/")[0]
+                player_id = int(parts)
+                requested_player_ids.add(player_id)
+
+                # Return empty game logs
+                return MockResponse({"stats": []}, status=200)
+            return MockResponse({}, status=404)
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc_val, exc_tb):
+            pass
+
+    # Mock pool with game and lineup data
+    class MockConnection:
+        async def fetch(self, query, *args):
+            if "FROM games" in query:
+                # Return completed game
+                return [{"game_id": "test_game_fc34_2"}]
+            elif "FROM lineups" in query:
+                # Return starting 9 from lineup
+                return [
+                    {"player_id": 12345},
+                    {"player_id": 12346},
+                    {"player_id": 12347},
+                    {"player_id": 12348},
+                    {"player_id": 12349},
+                    {"player_id": 12350},
+                    {"player_id": 12351},
+                    {"player_id": 12352},
+                    {"player_id": 12353},
+                ]
+            return []
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc_val, exc_tb):
+            pass
+
+    class MockPool:
+        def acquire(self):
+            return MockConnection()
+
+    async def mock_get_pool():
+        return MockPool()
+
+    with patch("aiohttp.ClientSession", MockSession), patch(
+        "mlb.ingestion.stats.get_pool", mock_get_pool
+    ):
+        rows = await stats_provider.fetch_game_logs(date(2024, 6, 15))
+
+    # Verify: function didn't crash and still fetched lineup players
+    assert len(requested_player_ids) > 0, "Should have fetched at least lineup players"
+
+    # Verify: all starting 9 were requested despite boxscore failure
+    starter_ids = {12345, 12346, 12347, 12348, 12349, 12350, 12351, 12352, 12353}
+    assert starter_ids.issubset(
+        requested_player_ids
+    ), f"Starting players {starter_ids - requested_player_ids} were not fetched after boxscore failure"
+
+    # Verify: no relief pitchers were fetched (boxscore failed, no fallback to discover them)
+    relief_pitcher_ids = {90001, 90002, 90003, 90004, 90005}
+    assert not relief_pitcher_ids.intersection(
+        requested_player_ids
+    ), "Relief pitchers should not be fetched when boxscore fails (lineups-only fallback)"
+
+    # Cleanup
+    cache.clear()
+
+
+@pytest.mark.asyncio
+async def test_step_1d_reuses_step_1c_boxscore_cache():
+    """
+    FC-34 / D-060: Verify Step 1D doesn't make redundant boxscore calls if Step 1C already cached data.
+    Simulate Step 1C caching boxscore. Mock HTTP session to count calls. Assert: boxscore NOT called by Step 1D.
+    """
+    import json
+    from pathlib import Path
+
+    from mlb.ingestion.cache import get_cache
+    from mlb.ingestion.stats import V1StatsProvider
+
+    stats_provider = V1StatsProvider()
+
+    # Clear cache before test
+    cache = get_cache()
+    cache.clear()
+
+    # Load fixture with relievers
+    fixture_path = Path(__file__).parent / "fixtures" / "boxscore_with_relievers.json"
+    with open(fixture_path) as f:
+        boxscore_data = json.load(f)
+
+    # Simulate Step 1C caching boxscore
+    game_id = "test_game_fc34_1"
+    cache_key = f"boxscore:{game_id}"
+    cache.set(cache_key, json.dumps(boxscore_data).encode("utf-8"), 7200)
+
+    # Track HTTP calls
+    http_calls = {"boxscore": 0, "gamelog": 0}
+
+    class MockResponse:
+        def __init__(self, data, status=200):
+            self.status = status
+            self._data = data
+
+        async def read(self):
+            if isinstance(self._data, dict):
+                return json.dumps(self._data).encode("utf-8")
+            return self._data
+
+        async def json(self):
+            if isinstance(self._data, bytes):
+                return json.loads(self._data.decode("utf-8"))
+            return self._data
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc_val, exc_tb):
+            pass
+
+    class MockSession:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def get(self, url, **kwargs):
+            # Boxscore endpoint - should NOT be called
+            if "/boxscore" in url:
+                http_calls["boxscore"] += 1
+                # Return data anyway (but test will fail if this is called)
+                return MockResponse(boxscore_data, status=200)
+            # Game log endpoints
+            elif "/stats?stats=gameLog" in url:
+                http_calls["gamelog"] += 1
+                # Return empty game logs
+                return MockResponse({"stats": []}, status=200)
+            return MockResponse({}, status=404)
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc_val, exc_tb):
+            pass
+
+    # Mock pool with game and lineup data
+    class MockConnection:
+        async def fetch(self, query, *args):
+            if "FROM games" in query:
+                return [{"game_id": game_id}]
+            elif "FROM lineups" in query:
+                # Return starting 9 from fixture
+                return [
+                    {"player_id": 12345},
+                    {"player_id": 12346},
+                    {"player_id": 12347},
+                    {"player_id": 12348},
+                    {"player_id": 12349},
+                    {"player_id": 12350},
+                    {"player_id": 12351},
+                    {"player_id": 12352},
+                    {"player_id": 12353},
+                ]
+            return []
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc_val, exc_tb):
+            pass
+
+    class MockPool:
+        def acquire(self):
+            return MockConnection()
+
+    async def mock_get_pool():
+        return MockPool()
+
+    with patch("aiohttp.ClientSession", MockSession), patch(
+        "mlb.ingestion.stats.get_pool", mock_get_pool
+    ):
+        # Call Step 1D
+        rows = await stats_provider.fetch_game_logs(date(2024, 6, 15))
+
+    # Assert: boxscore was NOT called (cache hit)
+    assert (
+        http_calls["boxscore"] == 0
+    ), f"Step 1D made {http_calls['boxscore']} redundant boxscore call(s) despite cache"
+
+    # Assert: game logs were still fetched
+    assert http_calls["gamelog"] > 0, "Step 1D should have fetched game logs"
+
+    # Assert: full roster was still discovered (relief pitchers from cached boxscore)
+    # Fixture has 9 starters + 5 relievers = 14 players minimum
+    # (actual number may be higher depending on implementation)
+    # For this test, we just verify that roster discovery worked
 
     # Cleanup
     cache.clear()

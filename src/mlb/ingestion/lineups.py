@@ -1,6 +1,7 @@
 """Concrete lineup provider with confirmation flip logic."""
 
 import asyncio
+import json
 import logging
 from datetime import datetime, timezone
 
@@ -11,6 +12,7 @@ from mlb.config.settings import get_config
 from mlb.db.models import Table
 from mlb.db.pool import get_pool
 from mlb.ingestion.base import LineupProvider, LineupRow, ensure_player_exists
+from mlb.ingestion.cache import get_cache
 
 logger = logging.getLogger(__name__)
 
@@ -104,13 +106,30 @@ class V1LineupProvider(LineupProvider):
         try:
             config = get_config()
             api_url = f"{config.mlb_stats_api_base_url}/game/{game_id}/boxscore"
+            cache = get_cache()
+            cache_key = f"boxscore:{game_id}"
 
-            # Fetch boxscore data with 10s timeout
-            timeout = aiohttp.ClientTimeout(total=10)
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.get(api_url) as response:
-                    response.raise_for_status()
-                    data = await response.json()
+            # Check cache first (shared with Step 1D)
+            cached_bytes = cache.get(cache_key)
+            if cached_bytes is not None:
+                try:
+                    data = json.loads(cached_bytes.decode("utf-8"))
+                    logger.info(f"Boxscore cache hit for game {game_id} (Step 1C)")
+                except Exception as e:
+                    logger.warning(f"Failed to deserialize cached boxscore for game {game_id}: {e}")
+                    cached_bytes = None
+
+            # If cache miss, fetch from API
+            if cached_bytes is None:
+                timeout = aiohttp.ClientTimeout(total=10)
+                async with aiohttp.ClientSession(timeout=timeout) as session:
+                    async with session.get(api_url) as response:
+                        response.raise_for_status()
+                        response_bytes = await response.read()
+                        # Cache the raw response bytes (TTL: 2 hours)
+                        cache.set(cache_key, response_bytes, 7200)
+                        data = json.loads(response_bytes.decode("utf-8"))
+                        logger.info(f"Boxscore fetched and cached for game {game_id} (Step 1C)")
 
             # Extract teams data
             teams_data = data.get("teams", {})

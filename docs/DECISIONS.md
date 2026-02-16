@@ -517,3 +517,19 @@ This document tracks all architectural and implementation decisions made through
 **Decision**: MLB Stats API people/stats is v1 game logs provider. Endpoints: `/api/v1/people/{playerId}/stats?stats=gameLog&group={hitting|pitching}&season={YYYY}`. Innings conversion: `full_innings × 3 + partial_outs`; invalid formats (e.g., "5.3") → None + WARNING. Starter heuristic: `ip_outs >= 9` (3+ innings). Two-way players: merge hitting + pitching into single row per `(player_id, game_id)`. UPSERT on `(player_id, game_id)` with DO UPDATE for stats corrections; `created_at` not updated on conflict. Fetch orchestration: query `games` for completed games on date, query `lineups` for player list, fetch season logs for each player, filter to target games. Unknown players upserted per D-020 before inserting logs. Empty lineups → `[]` + INFO log (not error). Timeout 10s, `[]` on failure per D-019. No API key required.
 
 ---
+
+### D-059: Step 1D roster discovery uses lineups table + boxscore API to capture all players who appeared in game.
+
+**Decision**: Step 1D roster discovery uses lineups table + boxscore API to capture all players who appeared in game (starters + bench + relievers). If boxscore unavailable, falls back to lineups-only (starting 9 per team). Full roster coverage is required for accurate pitcher projections in Unit 5.
+
+**Rationale**: Lineups table only contains starting 9 hitters per team (18 total), missing ~40% of players who appeared: relief pitchers, pinch hitters, defensive substitutions. Typical game has 25-30 players. Boxscore endpoint (`GET /api/v1/game/{gamePk}/boxscore`) contains ALL players under `teams.{home|away}.players` dict. Fetching boxscore adds 1 HTTP call per game (15 games = 15 calls), negligible compared to per-player log fetches. Fallback to lineups-only ensures degraded operation if boxscore fails (partial coverage acceptable for v1 with documented limitation).
+
+---
+
+### D-060: Step 1C and Step 1D share boxscore cache to eliminate redundant API calls.
+
+**Decision**: Step 1C (lineups) and Step 1D (stats) share a boxscore response cache with key format `boxscore:{game_id}` and TTL of 2 hours (7200 seconds). Step 1C caches raw HTTP response bytes when fetching lineups. Step 1D checks cache before calling API. On cache hit, HTTP call is skipped entirely. On cache miss, Step 1D fetches and caches (handles Step 1C failure case). This reduces boxscore API calls from 30 to 15 per 15-game slate when both steps run successfully.
+
+**Rationale**: Both Step 1C and Step 1D call the same boxscore endpoint (`GET /api/v1/game/{gamePk}/boxscore`). Without caching, this results in 30 redundant HTTP requests per 15-game slate. Step 1C fetches boxscore to extract lineups (batting order). Step 1D fetches the same endpoint to discover full roster (per D-059). The 2-hour TTL is long enough to cover the typical execution gap between Step 1C and Step 1D (minutes to hours) while staying within the game-day context. Caching raw bytes (not parsed JSON) ensures cache can be reused even if parsing logic differs between steps. Cache miss fallback in Step 1D ensures degraded operation if Step 1C failed or cache expired. Shared cache key (`boxscore:{game_id}`) makes the contract explicit and prevents namespace collisions with other cache keys (e.g., `gamelog:{player_id}:{season}:{group}`).
+
+---

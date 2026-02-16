@@ -80,6 +80,99 @@ class V1StatsProvider(StatsProvider):
     Upserts game logs to player_game_logs table on (player_id, game_id).
     """
 
+    async def _get_all_players_in_game(
+        self, game_id: str, session: aiohttp.ClientSession
+    ) -> set[int]:
+        """
+        Fetch all player IDs who appeared in a game from boxscore API.
+
+        This includes starters, bench players, relief pitchers, pinch hitters, etc.
+        Falls back to empty set on error (caller will use lineups-only).
+
+        Checks cache first (shared with Step 1C) to avoid redundant HTTP calls.
+
+        Args:
+            game_id: Game identifier
+            session: aiohttp ClientSession for making HTTP requests
+
+        Returns:
+            Set of player IDs who appeared in the game
+        """
+        config = get_config()
+        base_url = config.mlb_stats_api_base_url
+        boxscore_url = f"{base_url}/game/{game_id}/boxscore"
+        cache = get_cache()
+        cache_key = f"boxscore:{game_id}"
+
+        try:
+            # Check cache first (shared with Step 1C)
+            cached_bytes = cache.get(cache_key)
+            if cached_bytes is not None:
+                try:
+                    boxscore_data = json.loads(cached_bytes.decode("utf-8"))
+                    logger.info(f"Boxscore cache hit for game {game_id} (Step 1D)")
+                except Exception as e:
+                    logger.warning(
+                        f"Failed to deserialize cached boxscore for game {game_id}: {e}"
+                    )
+                    cached_bytes = None
+
+            # If cache miss, fetch from API
+            if cached_bytes is None:
+                async with session.get(
+                    boxscore_url, timeout=aiohttp.ClientTimeout(total=10)
+                ) as resp:
+                    if resp.status == 200:
+                        response_bytes = await resp.read()
+                        # Cache the raw response bytes (TTL: 2 hours)
+                        cache.set(cache_key, response_bytes, 7200)
+                        boxscore_data = json.loads(response_bytes.decode("utf-8"))
+                        logger.info(
+                            f"Boxscore fetched and cached for game {game_id} (Step 1D)"
+                        )
+                    else:
+                        logger.warning(
+                            f"HTTP {resp.status} fetching boxscore for game {game_id}"
+                        )
+                        return set()
+
+            # Extract player IDs from both teams
+            player_ids = set()
+
+            # Extract player IDs from home team
+            home_players = (
+                boxscore_data.get("teams", {})
+                .get("home", {})
+                .get("players", {})
+            )
+            for player_key, player_data in home_players.items():
+                player_id = player_data.get("person", {}).get("id")
+                if player_id:
+                    player_ids.add(player_id)
+
+            # Extract player IDs from away team
+            away_players = (
+                boxscore_data.get("teams", {})
+                .get("away", {})
+                .get("players", {})
+            )
+            for player_key, player_data in away_players.items():
+                player_id = player_data.get("person", {}).get("id")
+                if player_id:
+                    player_ids.add(player_id)
+
+            logger.info(
+                f"Extracted {len(player_ids)} player IDs from boxscore for game {game_id}"
+            )
+            return player_ids
+
+        except asyncio.TimeoutError:
+            logger.warning(f"Timeout fetching boxscore for game {game_id}")
+            return set()
+        except Exception as e:
+            logger.warning(f"Error fetching boxscore for game {game_id}: {e}")
+            return set()
+
     async def fetch_game_logs(self, game_date: date) -> list[GameLogRow]:
         """
         Fetch game logs for all players on a date.
@@ -121,7 +214,7 @@ class V1StatsProvider(StatsProvider):
 
             game_ids = [row["game_id"] for row in games]
 
-            # Step 2: Get player IDs from lineups
+            # Step 2: Get player IDs from lineups (starting 9 per team)
             async with pool.acquire() as conn:
                 lineups = await conn.fetch(
                     f"""
@@ -132,15 +225,31 @@ class V1StatsProvider(StatsProvider):
                     game_ids,
                 )
 
-            if not lineups:
+            lineup_player_ids = {row["player_id"] for row in lineups}
+
+            # Step 2b: Get ALL players who appeared in each game from boxscore
+            # This includes relief pitchers, pinch hitters, substitutions
+            all_player_ids = set(lineup_player_ids)
+
+            async with aiohttp.ClientSession() as session:
+                for game_id in game_ids:
+                    boxscore_player_ids = await self._get_all_players_in_game(
+                        game_id, session
+                    )
+                    all_player_ids.update(boxscore_player_ids)
+
+            # If no players found at all (both lineups and boxscore failed), return empty
+            if not all_player_ids:
                 logger.info(
-                    f"No lineups found for completed games on date {game_date}"
+                    f"No players found for completed games on date {game_date}"
                 )
                 return []
 
-            player_ids = [row["player_id"] for row in lineups]
+            player_ids = list(all_player_ids)
             logger.info(
-                f"Fetching logs for {len(player_ids)} players across {len(game_ids)} games"
+                f"Fetching logs for {len(player_ids)} players ({len(lineup_player_ids)} from lineups, "
+                f"{len(all_player_ids) - len(lineup_player_ids)} additional from boxscore) "
+                f"across {len(game_ids)} games"
             )
 
             # Step 3: Fetch hitting + pitching logs for each player
