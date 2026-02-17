@@ -202,3 +202,36 @@ docs/
 ---
 
 *End of Step 1D Implementation Log*
+
+---
+
+## Step 1E: Weather Ingestion - Known Limitation (Open-Meteo Archive Lag)
+
+**Date:** 2026-02-16
+**Issue:** FC-43 - Archive endpoint data availability lag
+
+### Open-Meteo Archive Data Lag
+
+The Open-Meteo archive endpoint (`archive-api.open-meteo.com/v1/archive`) has a **data availability lag of 1–5 days** after the game date, depending on the weather station. Historical weather data may not be immediately available.
+
+**Impact on Historical Backfill:**
+- If Step 1E is called for yesterday's game during the morning pipeline run (Operational Step 3 backfill), the archive endpoint may return empty or incomplete hourly data
+- The weather adapter correctly handles this by returning `None` (per D-019 conservative fallback)
+- This produces gaps in the weather table that are **not automatically retried**
+
+**Mitigation:**
+- Unit 4 feature engineering applies D-023 neutral defaults (72°F, 5mph wind, 0% precip) when weather data is missing for outdoor parks
+- Historical backfill can be **manually re-run 3–5 days later** to fill gaps once archive data becomes available
+- Indoor/retractable parks are unaffected (no weather row expected per D-018)
+
+**Out of Scope for v1:**
+- Automatic retry logic for historical weather gaps
+- Switching to a different historical weather provider with faster availability
+
+**Recommendation:**
+- For accurate historical backtesting, wait 5+ days after game date before running weather backfill
+- Alternatively, accept D-023 neutral defaults as a reasonable approximation for missing historical weather
+
+---
+
+*Note: This limitation does not affect real-time weather fetches (forecast endpoint) for upcoming games.*
