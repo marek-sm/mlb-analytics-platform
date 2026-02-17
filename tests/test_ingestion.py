@@ -4344,3 +4344,101 @@ async def test_weather_missing_wind_direction_returns_none():
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+@pytest.mark.asyncio
+async def test_write_weather_rejects_none_fields():
+    """FC-39: write_weather() must reject rows with None fields."""
+    from unittest.mock import patch
+
+    from mlb.ingestion.weather import V1WeatherProvider
+
+    weather_provider = V1WeatherProvider()
+
+    # Create WeatherRow with None wind_dir (incomplete data)
+    row_with_none = WeatherRow(
+        game_id="game123",
+        temp_f=72,
+        wind_speed_mph=8,
+        wind_dir=None,  # None field - should be rejected
+        precip_pct=10,
+        fetched_at=datetime(2026, 6, 15, 19, 0, 0, tzinfo=timezone.utc),
+    )
+
+    insert_called = {"count": 0}
+
+    # Mock database connection to track if insert was called
+    class MockConnection:
+        async def execute(self, query, *args):
+            if "INSERT INTO" in query:
+                insert_called["count"] += 1
+            return "INSERT 0 1"
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc_val, exc_tb):
+            pass
+
+    class MockPool:
+        def acquire(self):
+            return MockConnection()
+
+    async def mock_get_pool():
+        return MockPool()
+
+    with patch("mlb.ingestion.weather.get_pool", mock_get_pool):
+        # Call write_weather with incomplete row
+        await weather_provider.write_weather(row_with_none)
+
+    # Assert: No insert was attempted (guard rejected the row)
+    assert insert_called["count"] == 0, "write_weather() should not insert rows with None fields"
+
+
+@pytest.mark.asyncio
+async def test_write_weather_accepts_complete_data():
+    """FC-39: write_weather() should accept rows with all non-None fields."""
+    from unittest.mock import patch
+
+    from mlb.ingestion.weather import V1WeatherProvider
+
+    weather_provider = V1WeatherProvider()
+
+    # Create WeatherRow with all fields populated
+    complete_row = WeatherRow(
+        game_id="game123",
+        temp_f=72,
+        wind_speed_mph=8,
+        wind_dir="SW",
+        precip_pct=10,
+        fetched_at=datetime(2026, 6, 15, 19, 0, 0, tzinfo=timezone.utc),
+    )
+
+    insert_called = {"count": 0}
+
+    # Mock database connection to track if insert was called
+    class MockConnection:
+        async def execute(self, query, *args):
+            if "INSERT INTO" in query:
+                insert_called["count"] += 1
+            return "INSERT 0 1"
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc_val, exc_tb):
+            pass
+
+    class MockPool:
+        def acquire(self):
+            return MockConnection()
+
+    async def mock_get_pool():
+        return MockPool()
+
+    with patch("mlb.ingestion.weather.get_pool", mock_get_pool):
+        # Call write_weather with complete row
+        await weather_provider.write_weather(complete_row)
+
+    # Assert: Insert was attempted (guard allowed the row)
+    assert insert_called["count"] == 1, "write_weather() should insert rows with complete data"

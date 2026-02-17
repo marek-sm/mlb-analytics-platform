@@ -332,9 +332,26 @@ class V1WeatherProvider(WeatherProvider):
 
         On UNIQUE(game_id, fetched_at) violation, log WARNING but do not raise.
 
+        Validates that all weather fields are non-None before insert (FC-39).
+        If any field is None, logs WARNING and skips insert.
+
         Args:
             row: WeatherRow object to persist
         """
+        # FC-39: Guard against partial data - all fields must be non-None
+        if (
+            row.temp_f is None
+            or row.wind_speed_mph is None
+            or row.wind_dir is None
+            or row.precip_pct is None
+        ):
+            logger.warning(
+                f"Skipping weather insert for game {row.game_id}: incomplete data "
+                f"(temp_f={row.temp_f}, wind_speed_mph={row.wind_speed_mph}, "
+                f"wind_dir={row.wind_dir}, precip_pct={row.precip_pct})"
+            )
+            return
+
         pool = await get_pool()
 
         try:
