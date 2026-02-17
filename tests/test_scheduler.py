@@ -684,3 +684,69 @@ async def test_postponed_game_skipped(pool):
 
         # Should not process postponed game
         mock_process.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_weather_none_not_retried(pool):
+    """FC-45: Weather returning None is not retried (D-066)."""
+    game_id = "2024_TEST_WEATHER_NONE"
+    today = date.today()
+
+    async with pool.acquire() as conn:
+        # Insert outdoor park game
+        await conn.execute(
+            f"""
+            INSERT INTO {Table.GAMES}
+            (game_id, game_date, home_team_id, away_team_id, park_id,
+             first_pitch, status, updated_at)
+            VALUES ($1, $2, 147, 139, 3313, $3, 'scheduled', now())
+            ON CONFLICT (game_id) DO NOTHING
+            """,
+            game_id,
+            today,
+            datetime.now(timezone.utc) + timedelta(hours=2),
+        )
+
+    # Mock providers - weather returns None (dome park or fetch failure)
+    with patch("mlb.scheduler.pipeline.V1OddsProvider") as mock_odds, \
+         patch("mlb.scheduler.pipeline.V1WeatherProvider") as mock_weather, \
+         patch("mlb.scheduler.pipeline.V1LineupProvider") as mock_lineup, \
+         patch("mlb.scheduler.pipeline.predict_team_runs") as mock_predict:
+
+        # Odds provider returns non-empty to avoid retry
+        mock_odds_instance = mock_odds.return_value
+        mock_odds_instance.fetch_odds = AsyncMock(return_value=[
+            MagicMock(game_id=game_id, book="Test", market="ml", side="home",
+                      line=None, price=1.91, snapshot_ts=datetime.now(timezone.utc))
+        ])
+        mock_odds_instance.write_odds = AsyncMock()
+
+        # Weather provider returns None (dome park or fetch failure per D-066)
+        mock_weather_instance = mock_weather.return_value
+        mock_weather_instance.fetch_weather = AsyncMock(return_value=None)
+        mock_weather_instance.write_weather = AsyncMock()
+
+        # Lineup provider returns non-empty to avoid retry
+        mock_lineup_instance = mock_lineup.return_value
+        mock_lineup_instance.fetch_lineups = AsyncMock(return_value=[
+            MagicMock(game_id=game_id, team_id=147, player_id=101,
+                      batting_order=1, is_confirmed=False, source_ts=datetime.now(timezone.utc))
+        ])
+        mock_lineup_instance.write_lineups = AsyncMock()
+
+        # Skip prediction
+        mock_predict.side_effect = ValueError("Missing features")
+
+        # Run per-game pipeline
+        await run_game(game_id)
+
+        # Assert: weather fetch called exactly once (NO retry per D-066)
+        assert mock_weather_instance.fetch_weather.call_count == 1, \
+            "Weather should be called exactly once, not retried when returning None"
+
+        # Assert: write_weather NOT called (None result means skip write)
+        mock_weather_instance.write_weather.assert_not_called()
+
+        # Assert: other ingestion steps completed (pipeline continues)
+        mock_odds_instance.fetch_odds.assert_called_once()
+        mock_lineup_instance.fetch_lineups.assert_called_once()

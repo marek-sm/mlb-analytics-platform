@@ -14,11 +14,11 @@ This document tracks all architectural and implementation decisions made through
 - [Unit 6: Monte Carlo Simulation Engine](#unit-6-monte-carlo-simulation-engine) (D-032 to D-035)
 - [Unit 7: Odds Processing, Edge Calculation & Bankroll Sizing](#unit-7-odds-processing-edge-calculation--bankroll-sizing) (D-036 to D-039)
 - [Unit 8: Evaluation & Backtesting Harness](#unit-8-evaluation--backtesting-harness) (D-040 to D-042)
-- [Unit 9: Scheduler & Orchestration Pipeline](#unit-9-scheduler--orchestration-pipeline) (D-043 to D-046)
+- [Unit 9: Scheduler & Orchestration Pipeline](#unit-9-scheduler--orchestration-pipeline) (D-043 to D-046, D-066)
 - [Unit 10: Discord Bot & Publishing Layer](#unit-10-discord-bot--publishing-layer) (D-047 to D-050)
 - [Unit 11: Stripe Subscription & Webhook Integration](#unit-11-stripe-subscription--webhook-integration) (D-051 to D-054)
 
-**Total Decisions:** 57
+**Total Decisions:** 58
 
 ---
 
@@ -431,6 +431,14 @@ This document tracks all architectural and implementation decisions made through
 **Decision**: Publishing gate threshold: p_start ≥ 0.85 (configurable). Team markets exempt — always publishable when edge is computed.
 
 **Rationale**: Spec §Lineup Uncertainty Policy: "P(start) ≥ 0.85–0.90." Lower end chosen as default to maximize coverage. Team market exemption follows from spec: "public outputs limited to informational summaries" applies only to player props pre-lineup.
+
+---
+
+### D-066: Unit 9 does not retry weather ingestion
+
+**Decision**: Unit 9 does not retry weather ingestion. fetch_weather() returns None for both dome parks (expected) and fetch failures (fallback to D-023). Retrying would require Unit 9 to re-check parks.is_outdoor, duplicating adapter logic. Weather retries are low-value: data changes slowly, D-023 provides neutral defaults, and the next global run retries naturally. Weather is the only adapter where None is a valid non-failure return; all other adapters return [] on failure and are eligible for retry.
+
+**Rationale**: The WeatherProvider.fetch_weather() contract returns None in two scenarios: (1) indoor/retractable parks where no weather is expected (D-018), (2) outdoor parks where the fetch failed (network timeout, API error, incomplete data). Unit 9 cannot distinguish these cases without duplicating the dome-check logic (parks.is_outdoor, parks.is_retractable) that already lives in the weather adapter. Retrying on None would either: (a) waste retries on dome parks, or (b) require Unit 9 to query parks table and know adapter-internal semantics, violating the stateless adapter contract (D-019). Weather retries provide minimal value because weather data changes slowly (hourly at most), Unit 4 applies D-023 neutral defaults (72°F, 5mph, 0% precip) for missing outdoor park weather, and the next global run (within hours per D-043) will naturally retry. This is the simplest correct interpretation of D-019 for a None-returning adapter. All other ingestion adapters (games, lineups, odds, stats) return [] on failure and are eligible for retry per Unit 9 Spec §5.
 
 ---
 
