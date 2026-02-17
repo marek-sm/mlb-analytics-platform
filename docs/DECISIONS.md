@@ -533,3 +533,27 @@ This document tracks all architectural and implementation decisions made through
 **Rationale**: Both Step 1C and Step 1D call the same boxscore endpoint (`GET /api/v1/game/{gamePk}/boxscore`). Without caching, this results in 30 redundant HTTP requests per 15-game slate. Step 1C fetches boxscore to extract lineups (batting order). Step 1D fetches the same endpoint to discover full roster (per D-059). The 2-hour TTL is long enough to cover the typical execution gap between Step 1C and Step 1D (minutes to hours) while staying within the game-day context. Caching raw bytes (not parsed JSON) ensures cache can be reused even if parsing logic differs between steps. Cache miss fallback in Step 1D ensures degraded operation if Step 1C failed or cache expired. Shared cache key (`boxscore:{game_id}`) makes the contract explicit and prevents namespace collisions with other cache keys (e.g., `gamelog:{player_id}:{season}:{group}`).
 
 ---
+
+### D-061: Open-Meteo is the v1 weather provider
+
+**Decision**: Open-Meteo is the v1 weather provider. Forecast endpoint (`api.open-meteo.com/v1/forecast`) for today/future games; archive endpoint (`archive-api.open-meteo.com/v1/archive`) for past games. No API key required. Units requested as Fahrenheit + mph to avoid client-side conversion.
+
+**Rationale**: Operational Completion Plan specifies Open-Meteo. Free tier with 10,000 requests/day (well above v1 needs of ~15 outdoor parks × 15 games/day = 225 requests). No authentication simplifies deployment. Dual endpoints (forecast + archive) support both real-time and historical backfill use cases. Requesting temperature_unit=fahrenheit and wind_speed_unit=mph eliminates client-side unit conversion and reduces error risk.
+
+---
+
+### D-062: Wind direction as 8-point cardinal, converted from degrees on ingestion
+
+**Decision**: Wind direction stored as 8-point cardinal (N, NE, E, SE, S, SW, W, NW) in VARCHAR(4). Converted from degrees (0-360) via 22.5° bins on ingestion. Bins centered on each cardinal direction.
+
+**Rationale**: 8-point resolution is sufficient for v1 park wind modeling. Open-Meteo provides degrees; conversion on ingestion keeps downstream consumers simple (no trigonometry in Unit 4). 16-point compass adds no v1 benefit and complicates feature engineering. VARCHAR(4) accommodates all 8 values plus NULL.
+
+---
+
+### D-063: Hour selection for weather: floor first_pitch to hour, fallback to closest
+
+**Decision**: Hour selection logic: (1) Floor first_pitch to hour (UTC); (2) Look for exact match in API hourly.time[] array; (3) If not found, select entry with smallest absolute time difference; (4) If hourly.time is empty, return None.
+
+**Rationale**: Floor-hour is the most representative pre-game observation for a game starting at 19:10 (use 19:00 weather). Exact-match primary strategy handles the common case where API response aligns perfectly. Closest-hour fallback prevents unnecessary None returns when API response is slightly misaligned (e.g., API returns 18:00, 20:00 but not 19:00 due to timezone quirks or data gaps). Empty response → None is conservative (no data = no insert, Unit 4 applies neutral defaults per D-023).
+
+---

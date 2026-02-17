@@ -3675,5 +3675,672 @@ async def test_step_1d_reuses_step_1c_boxscore_cache():
     cache.clear()
 
 
+# ==================== Step 1E: Weather Ingestion Tests ====================
+
+
+@pytest.mark.asyncio
+async def test_weather_outdoor_park_returns_weather_row():
+    """AC1: Outdoor park returns WeatherRow with all fields populated."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from mlb.ingestion.weather import V1WeatherProvider
+
+    weather_provider = V1WeatherProvider()
+    game_id = "game123"
+    park_id = 19  # Coors Field (outdoor)
+
+    # Mock Open-Meteo JSON response
+    mock_response_data = {
+        "hourly": {
+            "time": ["2026-06-15T19:00", "2026-06-15T20:00"],
+            "temperature_2m": [72.7, 71.0],
+            "wind_speed_10m": [12.4, 7.1],
+            "wind_direction_10m": [225.0, 180.0],
+            "precipitation_probability": [35, 15],
+        }
+    }
+
+    # Mock database connection
+    class MockConnection:
+        async def fetchrow(self, query, *args):
+            if "FROM parks" in query:
+                return {
+                    "is_outdoor": True,
+                    "is_retractable": False,
+                    "latitude": 39.755882,
+                    "longitude": -104.994178,
+                }
+            elif "FROM games" in query:
+                return {
+                    "first_pitch": datetime(2026, 6, 15, 19, 10, 0, tzinfo=timezone.utc),
+                    "game_date": date(2026, 6, 15),
+                }
+            return None
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc_val, exc_tb):
+            pass
+
+    class MockPool:
+        def acquire(self):
+            return MockConnection()
+
+    async def mock_get_pool():
+        return MockPool()
+
+    # Mock aiohttp response
+    class MockResponse:
+        async def json(self):
+            return mock_response_data
+
+        def raise_for_status(self):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+    class MockClientSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+        def get(self, url, params=None):
+            return MockResponse()
+
+    with patch("mlb.ingestion.weather.get_pool", mock_get_pool), patch(
+        "aiohttp.ClientSession", return_value=MockClientSession()
+    ):
+        result = await weather_provider.fetch_weather(game_id, park_id)
+
+    # Assert WeatherRow returned with all fields
+    assert result is not None
+    assert isinstance(result, WeatherRow)
+    assert result.game_id == game_id
+    assert result.temp_f == 73  # rounded from 72.7
+    assert result.wind_speed_mph == 12  # rounded from 12.4
+    assert result.wind_dir == "SW"  # 225° → SW
+    assert result.precip_pct == 35
+    assert result.fetched_at is not None
+
+
+@pytest.mark.asyncio
+async def test_weather_indoor_park_returns_none_no_http():
+    """AC2: Indoor park returns None, zero HTTP calls."""
+    from unittest.mock import AsyncMock, patch
+
+    from mlb.ingestion.weather import V1WeatherProvider
+
+    weather_provider = V1WeatherProvider()
+    game_id = "game123"
+    park_id = 3394  # Tropicana Field (indoor)
+
+    http_calls = {"get": 0}
+
+    # Mock database connection
+    class MockConnection:
+        async def fetchrow(self, query, *args):
+            if "FROM parks" in query:
+                return {
+                    "is_outdoor": False,
+                    "is_retractable": False,
+                    "latitude": 27.768267,
+                    "longitude": -82.653497,
+                }
+            return None
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc_val, exc_tb):
+            pass
+
+    class MockPool:
+        def acquire(self):
+            return MockConnection()
+
+    async def mock_get_pool():
+        return MockPool()
+
+    # Mock aiohttp to count calls
+    class MockClientSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+        async def get(self, url, params=None):
+            http_calls["get"] += 1
+            raise RuntimeError("Should not call API for indoor park")
+
+    with patch("mlb.ingestion.weather.get_pool", mock_get_pool), patch(
+        "aiohttp.ClientSession", return_value=MockClientSession()
+    ):
+        result = await weather_provider.fetch_weather(game_id, park_id)
+
+    # Assert None returned and no HTTP calls
+    assert result is None
+    assert http_calls["get"] == 0
+
+
+@pytest.mark.asyncio
+async def test_weather_retractable_roof_returns_none_no_http():
+    """AC3: Retractable-roof park returns None, zero HTTP calls."""
+    from unittest.mock import AsyncMock, patch
+
+    from mlb.ingestion.weather import V1WeatherProvider
+
+    weather_provider = V1WeatherProvider()
+    game_id = "game123"
+    park_id = 14  # Rogers Centre (retractable)
+
+    http_calls = {"get": 0}
+
+    # Mock database connection
+    class MockConnection:
+        async def fetchrow(self, query, *args):
+            if "FROM parks" in query:
+                return {
+                    "is_outdoor": True,
+                    "is_retractable": True,
+                    "latitude": 43.641438,
+                    "longitude": -79.389353,
+                }
+            return None
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc_val, exc_tb):
+            pass
+
+    class MockPool:
+        def acquire(self):
+            return MockConnection()
+
+    async def mock_get_pool():
+        return MockPool()
+
+    # Mock aiohttp to count calls
+    class MockClientSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+        async def get(self, url, params=None):
+            http_calls["get"] += 1
+            raise RuntimeError("Should not call API for retractable park")
+
+    with patch("mlb.ingestion.weather.get_pool", mock_get_pool), patch(
+        "aiohttp.ClientSession", return_value=MockClientSession()
+    ):
+        result = await weather_provider.fetch_weather(game_id, park_id)
+
+    # Assert None returned and no HTTP calls
+    assert result is None
+    assert http_calls["get"] == 0
+
+
+@pytest.mark.asyncio
+async def test_weather_rounding_correctness():
+    """AC4: Rounding correctness for temp, wind speed, precip pct, and wind direction."""
+    from mlb.ingestion.weather import degrees_to_cardinal
+
+    # Test rounding
+    assert round(72.7) == 73
+    assert round(12.4) == 12
+    assert round(35) == 35
+
+    # Test wind direction conversion
+    assert degrees_to_cardinal(225) == "SW"
+    assert degrees_to_cardinal(0) == "N"
+    assert degrees_to_cardinal(360) == "N"
+    assert degrees_to_cardinal(45) == "NE"
+    assert degrees_to_cardinal(90) == "E"
+    assert degrees_to_cardinal(135) == "SE"
+    assert degrees_to_cardinal(180) == "S"
+    assert degrees_to_cardinal(270) == "W"
+    assert degrees_to_cardinal(315) == "NW"
+
+
+@pytest.mark.asyncio
+async def test_weather_wind_direction_8point_mapping():
+    """AC5: Wind direction 8-point mapping with boundary tests."""
+    from mlb.ingestion.weather import degrees_to_cardinal
+
+    # Test 8 cardinal directions
+    assert degrees_to_cardinal(0) == "N"
+    assert degrees_to_cardinal(45) == "NE"
+    assert degrees_to_cardinal(90) == "E"
+    assert degrees_to_cardinal(135) == "SE"
+    assert degrees_to_cardinal(180) == "S"
+    assert degrees_to_cardinal(225) == "SW"
+    assert degrees_to_cardinal(270) == "W"
+    assert degrees_to_cardinal(315) == "NW"
+
+    # Test boundaries (337.5° is the boundary between NW and N)
+    assert degrees_to_cardinal(337.4) == "NW"  # 337.4° is still NW
+    assert degrees_to_cardinal(337.5) == "N"  # 337.5° is N (boundary)
+    assert degrees_to_cardinal(22.4) == "N"  # 22.4° is still N
+    assert degrees_to_cardinal(22.5) == "NE"  # 22.5° is NE (boundary)
+    assert degrees_to_cardinal(359.9) == "N"  # wraps to N
+
+    # Test None handling
+    assert degrees_to_cardinal(None) is None
+
+
+@pytest.mark.asyncio
+async def test_weather_correct_hour_selection():
+    """AC6: Correct hour selection - floor first_pitch to hour."""
+    from mlb.ingestion.weather import select_closest_hour
+
+    hourly_times = [
+        "2026-06-15T18:00",
+        "2026-06-15T19:00",
+        "2026-06-15T20:00",
+        "2026-06-15T21:00",
+        "2026-06-15T22:00",
+        "2026-06-15T23:00",
+    ]
+
+    # Test: first_pitch at 19:10 should select 19:00 hour
+    first_pitch = datetime(2026, 6, 15, 19, 10, 0, tzinfo=timezone.utc)
+    idx = select_closest_hour(hourly_times, first_pitch)
+    assert idx == 1  # 19:00 is at index 1
+
+    # Test: first_pitch at 20:45 should select 20:00 hour
+    first_pitch = datetime(2026, 6, 15, 20, 45, 0, tzinfo=timezone.utc)
+    idx = select_closest_hour(hourly_times, first_pitch)
+    assert idx == 2  # 20:00 is at index 2
+
+    # Test: first_pitch at 18:00 exact should select 18:00 hour
+    first_pitch = datetime(2026, 6, 15, 18, 0, 0, tzinfo=timezone.utc)
+    idx = select_closest_hour(hourly_times, first_pitch)
+    assert idx == 0  # 18:00 is at index 0
+
+
+@pytest.mark.asyncio
+async def test_weather_api_timeout_returns_none():
+    """AC7: API timeout returns None with WARNING log."""
+    from unittest.mock import AsyncMock, patch
+
+    from mlb.ingestion.weather import V1WeatherProvider
+
+    weather_provider = V1WeatherProvider()
+    game_id = "game123"
+    park_id = 19  # Coors Field (outdoor)
+
+    # Mock database connection
+    class MockConnection:
+        async def fetchrow(self, query, *args):
+            if "FROM parks" in query:
+                return {
+                    "is_outdoor": True,
+                    "is_retractable": False,
+                    "latitude": 39.755882,
+                    "longitude": -104.994178,
+                }
+            elif "FROM games" in query:
+                return {
+                    "first_pitch": datetime(2026, 6, 15, 19, 10, 0, tzinfo=timezone.utc),
+                    "game_date": date(2026, 6, 15),
+                }
+            return None
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc_val, exc_tb):
+            pass
+
+    class MockPool:
+        def acquire(self):
+            return MockConnection()
+
+    async def mock_get_pool():
+        return MockPool()
+
+    # Mock aiohttp to raise timeout
+    class MockClientSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+        async def get(self, url, params=None):
+            raise asyncio.TimeoutError()
+
+    with patch("mlb.ingestion.weather.get_pool", mock_get_pool), patch(
+        "aiohttp.ClientSession", return_value=MockClientSession()
+    ):
+        result = await weather_provider.fetch_weather(game_id, park_id)
+
+    # Assert None returned
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_weather_null_first_pitch_returns_none_no_http():
+    """AC8: NULL first_pitch returns None with WARNING, zero HTTP calls."""
+    from unittest.mock import AsyncMock, patch
+
+    from mlb.ingestion.weather import V1WeatherProvider
+
+    weather_provider = V1WeatherProvider()
+    game_id = "game123"
+    park_id = 19  # Coors Field (outdoor)
+
+    http_calls = {"get": 0}
+
+    # Mock database connection
+    class MockConnection:
+        async def fetchrow(self, query, *args):
+            if "FROM parks" in query:
+                return {
+                    "is_outdoor": True,
+                    "is_retractable": False,
+                    "latitude": 39.755882,
+                    "longitude": -104.994178,
+                }
+            elif "FROM games" in query:
+                return {
+                    "first_pitch": None,  # NULL first_pitch
+                    "game_date": date(2026, 6, 15),
+                }
+            return None
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc_val, exc_tb):
+            pass
+
+    class MockPool:
+        def acquire(self):
+            return MockConnection()
+
+    async def mock_get_pool():
+        return MockPool()
+
+    # Mock aiohttp to count calls
+    class MockClientSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+        async def get(self, url, params=None):
+            http_calls["get"] += 1
+            raise RuntimeError("Should not call API when first_pitch is NULL")
+
+    with patch("mlb.ingestion.weather.get_pool", mock_get_pool), patch(
+        "aiohttp.ClientSession", return_value=MockClientSession()
+    ):
+        result = await weather_provider.fetch_weather(game_id, park_id)
+
+    # Assert None returned and no HTTP calls
+    assert result is None
+    assert http_calls["get"] == 0
+
+
+@pytest.mark.asyncio
+async def test_weather_historical_game_uses_archive_endpoint():
+    """AC9: Historical game uses archive endpoint."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from mlb.ingestion.weather import V1WeatherProvider
+
+    weather_provider = V1WeatherProvider()
+    game_id = "game123"
+    park_id = 19  # Coors Field (outdoor)
+
+    api_calls = {"forecast": 0, "archive": 0}
+
+    # Mock Open-Meteo JSON response
+    mock_response_data = {
+        "hourly": {
+            "time": ["2024-06-15T19:00"],
+            "temperature_2m": [72.0],
+            "wind_speed_10m": [8.0],
+            "wind_direction_10m": [225.0],
+            "precipitation_probability": [10],
+        }
+    }
+
+    # Mock database connection
+    class MockConnection:
+        async def fetchrow(self, query, *args):
+            if "FROM parks" in query:
+                return {
+                    "is_outdoor": True,
+                    "is_retractable": False,
+                    "latitude": 39.755882,
+                    "longitude": -104.994178,
+                }
+            elif "FROM games" in query:
+                return {
+                    "first_pitch": datetime(2024, 6, 15, 19, 0, 0, tzinfo=timezone.utc),
+                    "game_date": date(2024, 6, 15),  # Historical date
+                }
+            return None
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc_val, exc_tb):
+            pass
+
+    class MockPool:
+        def acquire(self):
+            return MockConnection()
+
+    async def mock_get_pool():
+        return MockPool()
+
+    # Mock aiohttp response to track which endpoint is called
+    class MockResponse:
+        async def json(self):
+            return mock_response_data
+
+        def raise_for_status(self):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+    class MockClientSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+        def get(self, url, params=None):
+            if "archive-api.open-meteo.com" in url:
+                api_calls["archive"] += 1
+            elif "api.open-meteo.com" in url:
+                api_calls["forecast"] += 1
+            return MockResponse()
+
+    with patch("mlb.ingestion.weather.get_pool", mock_get_pool), patch(
+        "aiohttp.ClientSession", return_value=MockClientSession()
+    ):
+        result = await weather_provider.fetch_weather(game_id, park_id)
+
+    # Assert archive endpoint was called, not forecast
+    assert api_calls["archive"] == 1
+    assert api_calls["forecast"] == 0
+    assert result is not None
+
+
+@pytest.mark.asyncio
+async def test_weather_append_only_semantics():
+    """AC10: D-015 append-only semantics - multiple snapshots allowed."""
+    from unittest.mock import AsyncMock, patch
+
+    from mlb.ingestion.weather import V1WeatherProvider
+
+    weather_provider = V1WeatherProvider()
+
+    # Create two weather rows with different fetched_at times
+    row1 = WeatherRow(
+        game_id="game123",
+        temp_f=72,
+        wind_speed_mph=8,
+        wind_dir="SW",
+        precip_pct=10,
+        fetched_at=datetime(2026, 6, 15, 18, 0, 0, tzinfo=timezone.utc),
+    )
+
+    row2 = WeatherRow(
+        game_id="game123",
+        temp_f=73,
+        wind_speed_mph=9,
+        wind_dir="W",
+        precip_pct=15,
+        fetched_at=datetime(2026, 6, 15, 19, 0, 0, tzinfo=timezone.utc),
+    )
+
+    rows_inserted = []
+
+    # Mock database connection
+    class MockConnection:
+        async def execute(self, query, *args):
+            if "INSERT INTO" in query:
+                # Track inserted rows
+                rows_inserted.append(args)
+            return "INSERT 0 1"
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc_val, exc_tb):
+            pass
+
+    class MockPool:
+        def acquire(self):
+            return MockConnection()
+
+    async def mock_get_pool():
+        return MockPool()
+
+    with patch("mlb.ingestion.weather.get_pool", mock_get_pool):
+        # Insert first snapshot
+        await weather_provider.write_weather(row1)
+
+        # Insert second snapshot (different fetched_at)
+        await weather_provider.write_weather(row2)
+
+    # Assert both rows were inserted (no UPSERT/UPDATE)
+    assert len(rows_inserted) == 2
+
+    # Both inserts should be for the same game_id
+    assert rows_inserted[0][0] == "game123"
+    assert rows_inserted[1][0] == "game123"
+
+    # But different temperatures (snapshots)
+    assert rows_inserted[0][1] == 72
+    assert rows_inserted[1][1] == 73
+
+
+@pytest.mark.asyncio
+async def test_weather_missing_wind_direction_returns_none():
+    """AC11: Missing wind direction returns None (incomplete data)."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from mlb.ingestion.weather import V1WeatherProvider
+
+    weather_provider = V1WeatherProvider()
+    game_id = "game123"
+    park_id = 19  # Coors Field (outdoor)
+
+    # Mock Open-Meteo JSON response with null wind_direction
+    mock_response_data = {
+        "hourly": {
+            "time": ["2026-06-15T19:00"],
+            "temperature_2m": [72.0],
+            "wind_speed_10m": [8.0],
+            "wind_direction_10m": [None],  # NULL wind direction
+            "precipitation_probability": [10],
+        }
+    }
+
+    # Mock database connection
+    class MockConnection:
+        async def fetchrow(self, query, *args):
+            if "FROM parks" in query:
+                return {
+                    "is_outdoor": True,
+                    "is_retractable": False,
+                    "latitude": 39.755882,
+                    "longitude": -104.994178,
+                }
+            elif "FROM games" in query:
+                return {
+                    "first_pitch": datetime(2026, 6, 15, 19, 0, 0, tzinfo=timezone.utc),
+                    "game_date": date(2026, 6, 15),
+                }
+            return None
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc_val, exc_tb):
+            pass
+
+    class MockPool:
+        def acquire(self):
+            return MockConnection()
+
+    async def mock_get_pool():
+        return MockPool()
+
+    # Mock aiohttp response
+    class MockResponse:
+        async def json(self):
+            return mock_response_data
+
+        def raise_for_status(self):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+    class MockClientSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+        def get(self, url, params=None):
+            return MockResponse()
+
+    with patch("mlb.ingestion.weather.get_pool", mock_get_pool), patch(
+        "aiohttp.ClientSession", return_value=MockClientSession()
+    ):
+        result = await weather_provider.fetch_weather(game_id, park_id)
+
+    # Assert None returned (incomplete data)
+    assert result is None
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

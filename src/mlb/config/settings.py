@@ -199,6 +199,14 @@ class AppConfig(BaseSettings):
         default="https://api.the-odds-api.com/v4",
         description="The Odds API base URL",
     )
+    open_meteo_forecast_url: str = Field(
+        default="https://api.open-meteo.com/v1/forecast",
+        description="Open-Meteo forecast API URL (D-061)",
+    )
+    open_meteo_archive_url: str = Field(
+        default="https://archive-api.open-meteo.com/v1/archive",
+        description="Open-Meteo archive API URL for historical data (D-061)",
+    )
 
     @field_validator("db_pool_max")
     @classmethod
