@@ -1,4 +1,5 @@
 -- 007_add_park_coords.sql: Add latitude/longitude columns to parks table for weather API
+-- FC-38 verified: Migration sequence [1,2,3,4,5,6,7] is correct. No gaps. 007 is next available slot.
 
 -- Add coordinate columns
 ALTER TABLE parks ADD COLUMN latitude NUMERIC(9,6);
