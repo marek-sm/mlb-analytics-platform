@@ -9,7 +9,7 @@ This document tracks all architectural and implementation decisions made through
 - [Unit 1: Repository Skeleton & Configuration](#unit-1-repository-skeleton--configuration) (D-001 to D-004)
 - [Unit 2: Database Schema & Migrations](#unit-2-database-schema--migrations) (D-005 to D-016)
 - [Unit 3: Data Ingestion](#unit-3-data-ingestion--provider-agnostic-interfaces) (D-017 to D-020, D-055, D-056)
-- [Unit 4: Team Run-Scoring Models](#unit-4-team-run-scoring-models) (D-021 to D-026)
+- [Unit 4: Team Run-Scoring Models](#unit-4-team-run-scoring-models) (D-021 to D-026, D-065)
 - [Unit 5: Player Prop Models](#unit-5-player-prop-models) (D-027 to D-031)
 - [Unit 6: Monte Carlo Simulation Engine](#unit-6-monte-carlo-simulation-engine) (D-032 to D-035)
 - [Unit 7: Odds Processing, Edge Calculation & Bankroll Sizing](#unit-7-odds-processing-edge-calculation--bankroll-sizing) (D-036 to D-039)
@@ -18,7 +18,7 @@ This document tracks all architectural and implementation decisions made through
 - [Unit 10: Discord Bot & Publishing Layer](#unit-10-discord-bot--publishing-layer) (D-047 to D-050)
 - [Unit 11: Stripe Subscription & Webhook Integration](#unit-11-stripe-subscription--webhook-integration) (D-051 to D-054)
 
-**Total Decisions:** 56
+**Total Decisions:** 57
 
 ---
 
@@ -253,6 +253,14 @@ This document tracks all architectural and implementation decisions made through
 **Decision**: Model features are passed as named columns (DataFrame or dict), never as positional arrays. Feature names are derived from GameFeatures.feature_names() and must match between training and inference. This prevents silent feature misalignment when the feature set evolves.
 
 **Rationale**: The original implementation converted GameFeatures to raw numpy arrays in _features_to_array(), discarding column names and creating implicit positional coupling. If Unit 5 extends GameFeatures or fields are reordered, the model would silently map features to wrong columns, producing garbage predictions with no error. Using DataFrames with explicit feature names eliminates this coupling and allows sklearn/LightGBM to validate feature names at prediction time. The test_feature_name_stability test enforces that GameFeatures.feature_names() matches the trained model's booster_.feature_name(), catching misalignment at test time rather than in production.
+
+---
+
+### D-065: Weather consumer contract — Unit 4 must join parks.is_outdoor
+
+**Decision**: When Unit 4 reads weather data, it must join parks.is_outdoor to distinguish "indoor park (no weather expected)" from "outdoor park with missing weather (apply D-023 fallback)." Absence of a weather row alone is ambiguous — the parks table is the authoritative source for indoor/outdoor classification.
+
+**Rationale**: The weather table stores rows only for outdoor parks where weather was successfully fetched. Two scenarios produce no weather row: (1) indoor/retractable park where no weather is expected (per D-018), (2) outdoor park where weather fetch failed (network timeout, API error, incomplete data per FC-39). Unit 4's feature engineering must distinguish these cases: indoor parks receive neutral or sentinel features (implementation TBD), while outdoor parks with missing weather receive D-023 fallback defaults (72°F, 5mph, 0% precip). Without joining parks.is_outdoor, Unit 4 cannot make this distinction — it would incorrectly apply D-023 defaults to indoor parks or fail to apply them to outdoor parks with missing weather. This decision documents the contract gap between Step 1E (weather ingestion) and Unit 4 (feature engineering) to prevent silent modeling errors.
 
 ---
 
