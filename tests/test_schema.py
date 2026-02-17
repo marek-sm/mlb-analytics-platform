@@ -296,6 +296,36 @@ class TestSeedData:
             )
             assert null_factors == 0
 
+    @pytest.mark.asyncio
+    async def test_park_coords_within_north_america(self, pool):
+        """Test that all 30 parks have coordinates within North America bounding box."""
+        async with pool.acquire() as conn:
+            # Query all parks with coordinates
+            rows = await conn.fetch(
+                "SELECT park_id, latitude, longitude FROM parks"
+            )
+
+            # Assert we have exactly 30 parks (no NULLs)
+            assert len(rows) == 30, f"Expected 30 parks with coordinates, found {len(rows)}"
+
+            # North America bounding box (continental US + Toronto):
+            # Latitude: 24.0 (southern Florida) to 50.0 (northern border + Canada)
+            # Longitude: -125.0 (west coast) to -66.0 (east coast)
+            for row in rows:
+                park_id = row["park_id"]
+                lat = row["latitude"]
+                lon = row["longitude"]
+
+                # Check latitude bounds
+                assert lat is not None, f"Park {park_id} has NULL latitude"
+                assert 24.0 <= lat <= 50.0, \
+                    f"Park {park_id} latitude {lat} outside North America bounds [24.0, 50.0]"
+
+                # Check longitude bounds
+                assert lon is not None, f"Park {park_id} has NULL longitude"
+                assert -125.0 <= lon <= -66.0, \
+                    f"Park {park_id} longitude {lon} outside North America bounds [-125.0, -66.0]"
+
 
 class TestColumnTypes:
     """Test that columns have correct types and constraints."""

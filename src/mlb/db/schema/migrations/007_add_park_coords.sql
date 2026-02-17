@@ -35,7 +35,7 @@ UPDATE parks SET latitude = 33.445302, longitude = -112.066687 WHERE park_id = 1
 UPDATE parks SET latitude = 39.755882, longitude = -104.994178 WHERE park_id = 19;   -- Coors Field
 UPDATE parks SET latitude = 34.073851, longitude = -118.240449 WHERE park_id = 22;   -- Dodger Stadium
 UPDATE parks SET latitude = 32.707530, longitude = -117.156830 WHERE park_id = 2680; -- Petco Park
-UPDATE parks SET latitude = 37.778383, longitude = -122.389448 WHERE park_id = 24;   -- Oracle Park
+UPDATE parks SET latitude = 37.778383, longitude = -122.389448 WHERE park_id = 2395; -- Oracle Park
 
 -- Add NOT NULL constraints after data is populated
 ALTER TABLE parks ALTER COLUMN latitude SET NOT NULL;
