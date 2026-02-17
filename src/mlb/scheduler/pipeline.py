@@ -90,10 +90,9 @@ async def run_global(run_type: Literal["night_before", "morning", "midday"]) -> 
         # Step 3: Ingest weather for all games
         weather_provider = V1WeatherProvider()
         for game_id in game_ids:
-            weather_row = await _retry_ingestion(
-                lambda: weather_provider.fetch_weather(game_id),
-                f"weather-{game_id}",
-            )
+            # Weather returns None for dome/retractable parks (skip, not failure)
+            # Per D-066: do not retry weather when None is returned
+            weather_row = await weather_provider.fetch_weather(game_id)
             if weather_row:
                 await weather_provider.write_weather([weather_row])
 
@@ -157,10 +156,9 @@ async def run_game(game_id: str) -> None:
 
         # Ingest weather
         weather_provider = V1WeatherProvider()
-        weather_row = await _retry_ingestion(
-            lambda: weather_provider.fetch_weather(game_id),
-            f"weather-{game_id}",
-        )
+        # Weather returns None for dome/retractable parks (skip, not failure)
+        # Per D-066: do not retry weather when None is returned
+        weather_row = await weather_provider.fetch_weather(game_id)
         if weather_row:
             await weather_provider.write_weather([weather_row])
 

@@ -424,8 +424,8 @@ async def test_weather_skipped_retractable_roof():
             # Insert test park: is_outdoor = TRUE, is_retractable = TRUE
             await conn.execute(
                 """
-                INSERT INTO parks (park_id, name, team_id, is_outdoor, is_retractable, park_factor)
-                VALUES (32000, 'Test Retractable Park', $1, TRUE, TRUE, 1.000)
+                INSERT INTO parks (park_id, name, team_id, is_outdoor, is_retractable, park_factor, latitude, longitude)
+                VALUES (32000, 'Test Retractable Park', $1, TRUE, TRUE, 1.000, 40.0, -75.0)
                 ON CONFLICT (park_id) DO NOTHING
                 """,
                 team_id,
@@ -3816,7 +3816,7 @@ async def test_weather_indoor_park_returns_none_no_http():
         async def __aexit__(self, *args):
             pass
 
-        async def get(self, url, params=None):
+        def get(self, url, params=None):
             http_calls["get"] += 1
             raise RuntimeError("Should not call API for indoor park")
 
@@ -3876,7 +3876,7 @@ async def test_weather_retractable_roof_returns_none_no_http():
         async def __aexit__(self, *args):
             pass
 
-        async def get(self, url, params=None):
+        def get(self, url, params=None):
             http_calls["get"] += 1
             raise RuntimeError("Should not call API for retractable park")
 
@@ -4017,7 +4017,7 @@ async def test_weather_api_timeout_returns_none():
         async def __aexit__(self, *args):
             pass
 
-        async def get(self, url, params=None):
+        def get(self, url, params=None):
             raise asyncio.TimeoutError()
 
     with patch("mlb.ingestion.weather.get_pool", mock_get_pool), patch(
@@ -4080,7 +4080,7 @@ async def test_weather_null_first_pitch_returns_none_no_http():
         async def __aexit__(self, *args):
             pass
 
-        async def get(self, url, params=None):
+        def get(self, url, params=None):
             http_calls["get"] += 1
             raise RuntimeError("Should not call API when first_pitch is NULL")
 
