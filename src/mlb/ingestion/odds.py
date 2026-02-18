@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 from datetime import datetime, timezone
+from typing import Optional
 
 import aiohttp
 import asyncpg
@@ -94,42 +95,54 @@ class V1OddsProvider(OddsProvider):
     In production, this would fetch from a real odds API.
     """
 
-    async def fetch_odds(self, game_id: str) -> list[OddsRow]:
+    async def fetch_odds(
+        self,
+        game_id: str,
+        *,
+        event_date: Optional[datetime] = None,
+    ) -> list[OddsRow]:
         """
         Fetch odds snapshots for a game.
+
+        When event_date is provided the historical endpoint is used
+        (/v4/historical/sports/baseball_mlb/odds?date=...) instead of the live
+        endpoint, enabling historical backfill.  The response schema is
+        identical between the two endpoints (per D-067).
 
         Conservative fallback: on error, log warning and return empty list.
 
         Args:
-            game_id: Game identifier
+            game_id:    Game identifier.
+            event_date: UTC datetime of the snapshot to retrieve.  When None
+                        (default) the live endpoint is called.  When provided
+                        the historical endpoint is called and costs 10 API
+                        credits vs 1 for the live endpoint (per D-067).
 
         Returns:
-            List of OddsRow objects with price in European decimal (≥ 1.0)
+            List of OddsRow objects with price in European decimal (≥ 1.0).
         """
         try:
             config = get_config()
             cache = get_cache()
 
-            # Check cache first (TTL = 300 seconds = 5 minutes)
-            cache_key = f"odds_api_mlb"
-            cached_response = cache.get(cache_key)
-
-            if cached_response is not None:
-                logger.info("Using cached odds API response")
-                response_data = json.loads(cached_response.decode("utf-8"))
-            else:
-                # Make API call
+            if event_date is not None:
+                # ----------------------------------------------------------
+                # Historical endpoint (D-067): no cache — historical snapshots
+                # are fixed and not re-requested during normal operation.
+                # ----------------------------------------------------------
                 if not config.odds_api_key:
                     logger.warning("odds_api_key not configured, returning empty odds")
                     return []
 
-                url = f"{config.odds_api_base_url}/sports/baseball_mlb/odds"
+                url = f"{config.odds_api_base_url}/historical/sports/baseball_mlb/odds"
+                date_param = event_date.strftime("%Y-%m-%dT%H:%M:%SZ")
                 params = {
                     "apiKey": config.odds_api_key,
                     "regions": "us",
                     "markets": "h2h,spreads,totals",
                     "oddsFormat": "american",
                     "dateFormat": "iso",
+                    "date": date_param,
                 }
 
                 try:
@@ -138,20 +151,73 @@ class V1OddsProvider(OddsProvider):
                         async with session.get(url, params=params) as resp:
                             if resp.status != 200:
                                 logger.warning(
-                                    f"Odds API returned status {resp.status}, returning empty"
+                                    f"Odds API historical returned status {resp.status}, "
+                                    f"returning empty"
                                 )
                                 return []
 
                             response_text = await resp.text()
                             response_data = json.loads(response_text)
-
-                            # Cache the response for 5 minutes
-                            cache.set(cache_key, response_text.encode("utf-8"), ttl_seconds=300)
-                            logger.info("Fetched and cached odds from API")
+                            logger.info(
+                                f"Fetched historical odds for date {date_param}"
+                            )
 
                 except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-                    logger.warning(f"Odds API request failed: {e}", exc_info=True)
+                    logger.warning(
+                        f"Historical odds API request failed: {e}", exc_info=True
+                    )
                     return []
+
+            else:
+                # ----------------------------------------------------------
+                # Live endpoint: cached for 5 minutes (existing behaviour).
+                # ----------------------------------------------------------
+                cache_key = "odds_api_mlb"
+                cached_response = cache.get(cache_key)
+
+                if cached_response is not None:
+                    logger.info("Using cached odds API response")
+                    response_data = json.loads(cached_response.decode("utf-8"))
+                else:
+                    if not config.odds_api_key:
+                        logger.warning(
+                            "odds_api_key not configured, returning empty odds"
+                        )
+                        return []
+
+                    url = f"{config.odds_api_base_url}/sports/baseball_mlb/odds"
+                    params = {
+                        "apiKey": config.odds_api_key,
+                        "regions": "us",
+                        "markets": "h2h,spreads,totals",
+                        "oddsFormat": "american",
+                        "dateFormat": "iso",
+                    }
+
+                    try:
+                        timeout = aiohttp.ClientTimeout(total=10)
+                        async with aiohttp.ClientSession(timeout=timeout) as session:
+                            async with session.get(url, params=params) as resp:
+                                if resp.status != 200:
+                                    logger.warning(
+                                        f"Odds API returned status {resp.status}, returning empty"
+                                    )
+                                    return []
+
+                                response_text = await resp.text()
+                                response_data = json.loads(response_text)
+
+                                # Cache the response for 5 minutes
+                                cache.set(
+                                    cache_key,
+                                    response_text.encode("utf-8"),
+                                    ttl_seconds=300,
+                                )
+                                logger.info("Fetched and cached odds from API")
+
+                    except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                        logger.warning(f"Odds API request failed: {e}", exc_info=True)
+                        return []
 
             # Build team name → team_id lookup and query games
             pool = await get_pool()

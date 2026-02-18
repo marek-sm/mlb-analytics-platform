@@ -1,5 +1,64 @@
 # Development Log
 
+## 2026-02-16: Step 3 - Historical Backfill (≥30 Games)
+
+### What Shipped
+
+**Implementation: `src/mlb/operations/backfill.py`**
+- `run_backfill(start_date, end_date)` async orchestration function executing seven FK-safe phases:
+  1. **Schedule** — `fetch_schedule` + `write_games` per date, 1 s sleep between dates
+  2. **Lineups** — `fetch_lineup(game_id, team_id)` called **twice per game** (home + away); persistence handled internally by adapter (D-060 boxscore cache makes second call cheap)
+  3. **Stats** — `fetch_game_logs` + `write_game_logs` per unique date, 1 s sleep between dates
+  4. **Odds** — `fetch_odds` per final game, 0.5 s sleep (see Known Limitations)
+  5. **Weather** — `fetch_weather` per final game; `None` returns skipped per D-066, 0.5 s sleep
+  6. **Verify** — six SQL scalar queries logged; RuntimeError if games < 30 or game_logs = 0
+  7. **Train** — `team_runs.train(conn)` + `player_props.train(conn)`, artifact presence confirmed
+- CLI entry point: `python -m mlb.operations.backfill --start YYYY-MM-DD --end YYYY-MM-DD`
+- All adapter failures (exception, `[]`, `None`) are caught, logged as WARNING, and skipped — the backfill never aborts mid-run due to a single adapter failure
+- Idempotent: UPSERT adapters (games, stats) handle re-runs gracefully; append-only tables (lineups, odds, weather) add new rows on re-run (per D-015)
+
+**New package: `src/mlb/operations/__init__.py`** (empty, required for `python -m` entry)
+
+**Test Coverage: `tests/test_backfill.py`**
+- 6 unit tests, all using mocked adapters and pool — zero real DB or API calls
+
+### Tests Added
+
+1. `test_backfill_ingests_games_in_date_order` — `fetch_schedule` called once per date in ascending date order
+2. `test_backfill_calls_lineup_for_both_teams` — `fetch_lineup` called exactly twice per final game (62 calls for 31 games); both home and away team IDs present
+3. `test_backfill_ingests_odds_for_all_games` — `fetch_odds` called once for every final game (31 calls)
+4. `test_backfill_weather_skips_none` — `write_weather` not called when `fetch_weather` returns `None`
+5. `test_backfill_fails_under_30_games` — `RuntimeError` with count raised when DB reports < 30 final games
+6. `test_backfill_continues_on_adapter_failure` — adapter exception on one date is swallowed; lineup phase still executes for games from successful dates
+
+### Known Limitations
+
+1. **Odds adapter uses live endpoint only** — `V1OddsProvider.fetch_odds()` calls `/v4/sports/baseball_mlb/odds` (live). For historical games no longer in the live feed it returns `[]` (per D-019). Production backfill requires extending the adapter with an optional `event_date` parameter routed to `/v4/historical/sports/baseball_mlb/odds?date=YYYY-MM-DD`. Flagged via `logger.warning` at runtime. No adapter modification made (out of scope per spec).
+2. **Lineup write method discrepancy** — The spec assumed a separate `write_lineups()` method, but `V1LineupProvider.fetch_lineup()` handles DB persistence internally via `_persist_lineups()`. The backfill calls only `fetch_lineup()` per team, which is the correct usage.
+3. **Model training needs DB connection** — Both `team_runs.train()` and `player_props.train()` require `asyncpg.Connection`, not a zero-argument call. The backfill acquires a pool connection and passes it directly. Spec assumed no-arg calls.
+4. **Weather archive lag** — Open-Meteo archive has a 1–5 day data availability lag (FC-43); games within that window may return `None`. Unit 4 applies D-023 neutral defaults.
+5. **Sequential ingestion** — No parallelization; total runtime ~60–90 minutes for a 21-day window with sleeps. Acceptable for a one-time operation per spec.
+
+### What's Next
+
+- Extend `V1OddsProvider` with a `fetch_odds(game_id, event_date=None)` historical-endpoint path before running production backfill
+- Run `python -m mlb.operations.backfill --start 2025-06-01 --end 2025-06-21` against a populated database to populate training data
+- Proceed to Unit 4 (Features) and Unit 5 (Player Props) model evaluation once backfill data is in place
+
+### Files Modified
+
+```
+src/mlb/operations/
+    __init__.py        # NEW — empty package marker
+    backfill.py        # NEW — run_backfill() + CLI entry point
+tests/
+    test_backfill.py   # NEW — 6 unit tests (mock adapters)
+docs/
+    DEVLOG.md          # APPEND — this entry
+```
+
+---
+
 ## 2026-02-14: Step 1C - Lineups Ingestion (MLB Stats API)
 
 ### What Shipped

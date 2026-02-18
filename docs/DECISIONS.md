@@ -573,3 +573,11 @@ This document tracks all architectural and implementation decisions made through
 **Rationale**: Floor-hour is the most representative pre-game observation for a game starting at 19:10 (use 19:00 weather). Exact-match primary strategy handles the common case where API response aligns perfectly. Closest-hour fallback prevents unnecessary None returns when API response is slightly misaligned (e.g., API returns 18:00, 20:00 but not 19:00 due to timezone quirks or data gaps). Empty response → None is conservative (no data = no insert, Unit 4 applies neutral defaults per D-023).
 
 ---
+
+### D-067: V1OddsProvider.fetch_odds() supports an optional event_date parameter for historical endpoint routing
+
+**Decision**: `V1OddsProvider.fetch_odds()` accepts an optional keyword-only parameter `event_date: datetime | None = None`. When `event_date` is provided, the historical endpoint (`/v4/historical/sports/baseball_mlb/odds?date={ISO8601}`) is called instead of the live endpoint (`/v4/sports/baseball_mlb/odds`). The response schema is identical between the two endpoints. Historical responses are not cached (one-time backfill operation). The ABC signature in `base.py` is unchanged — `event_date` is keyword-only with a default. Backfill (Step 3) passes `game.first_pitch` as `event_date`. The live scheduler pipeline passes `None` (default), preserving existing behavior.
+
+**Rationale**: The $30/month Odds API plan includes the historical endpoint, which returns odds snapshots as they existed at a given UTC timestamp. Without this, `fetch_odds()` called on past games returns `[]` (live feed only covers current/upcoming games), producing no odds data for historical backfill. Units 7 (edge calculation) and 8 (evaluation/CLV) require historical odds to be validated on backfilled games. Each historical API call costs 10 credits vs 1 for the live endpoint. A 21-day backfill of ~315 games × 10 = 3,150 credits — well within the 20k monthly limit. The ABC is not changed because keyword-only parameters with defaults are backward-compatible with the base class contract.
+
+---

@@ -4442,3 +4442,124 @@ async def test_write_weather_accepts_complete_data():
 
     # Assert: Insert was attempted (guard allowed the row)
     assert insert_called["count"] == 1, "write_weather() should insert rows with complete data"
+
+
+# FC-46: Historical odds endpoint routing
+async def test_fetch_odds_historical_endpoint():
+    """When event_date is provided, fetch_odds routes to the historical endpoint.
+
+    Verifies (D-067):
+    - URL targets /v4/historical/sports/baseball_mlb/odds (not the live feed)
+    - 'date' query param is formatted as ISO8601 UTC with Z suffix
+    - Returned OddsRow objects are parsed identically to the live endpoint
+    """
+    import json as _json
+    from unittest.mock import MagicMock
+
+    event_date = datetime(2025, 6, 15, 23, 0, 0, tzinfo=timezone.utc)
+    game_id = "745123"
+
+    # Minimal API response — identical schema to the live endpoint
+    mock_response_payload = [
+        {
+            "id": "evt-abc",
+            "sport_key": "baseball_mlb",
+            "home_team": "Philadelphia Phillies",
+            "away_team": "Atlanta Braves",
+            "commence_time": "2025-06-15T23:05:00Z",
+            "bookmakers": [
+                {
+                    "key": "draftkings",
+                    "markets": [
+                        {
+                            "key": "h2h",
+                            "last_update": "2025-06-15T22:00:00Z",
+                            "outcomes": [
+                                {"name": "Philadelphia Phillies", "price": -130},
+                                {"name": "Atlanta Braves", "price": 110},
+                            ],
+                        }
+                    ],
+                }
+            ],
+        }
+    ]
+
+    # Capture which URL was called
+    captured = {}
+
+    # Mock aiohttp response
+    mock_resp = AsyncMock()
+    mock_resp.status = 200
+    mock_resp.text = AsyncMock(return_value=_json.dumps(mock_response_payload))
+    mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
+    mock_resp.__aexit__ = AsyncMock(return_value=False)
+
+    # Mock aiohttp session
+    mock_session = MagicMock()
+
+    def fake_get(url, params=None):
+        # Synchronous — returns the async context manager directly
+        captured["url"] = url
+        captured["params"] = params or {}
+        return mock_resp
+
+    mock_session.get = fake_get
+    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session.__aexit__ = AsyncMock(return_value=False)
+
+    # Mock DB pool — teams lookup + game lookup
+    mock_conn = AsyncMock()
+    mock_conn.fetch.side_effect = [
+        # First fetch: teams table
+        [{"team_id": 143, "name": "Philadelphia Phillies"}],
+        # Second fetch: games table (match by home_team_id + game_date)
+        [{"game_id": game_id, "first_pitch": event_date}],
+    ]
+    acquire_cm = MagicMock()
+    acquire_cm.__aenter__ = AsyncMock(return_value=mock_conn)
+    acquire_cm.__aexit__ = AsyncMock(return_value=False)
+    mock_pool = MagicMock()
+    mock_pool.acquire.return_value = acquire_cm
+
+    # Mock config
+    mock_config = MagicMock()
+    mock_config.odds_api_key = "test-key-xyz"
+    mock_config.odds_api_base_url = "https://api.the-odds-api.com/v4"
+
+    provider = V1OddsProvider()
+
+    with (
+        patch("mlb.ingestion.odds.get_config", return_value=mock_config),
+        patch("mlb.ingestion.odds.get_pool", new_callable=AsyncMock, return_value=mock_pool),
+        patch("mlb.ingestion.odds.get_cache", return_value=Cache()),
+        patch("aiohttp.ClientSession", return_value=mock_session),
+    ):
+        rows = await provider.fetch_odds(game_id, event_date=event_date)
+
+    # Assert historical URL was targeted
+    assert "historical" in captured["url"], (
+        f"Expected historical endpoint URL, got: {captured['url']}"
+    )
+    assert captured["url"].endswith("/historical/sports/baseball_mlb/odds"), (
+        f"Unexpected URL: {captured['url']}"
+    )
+
+    # Assert date param is ISO8601 UTC with Z suffix
+    assert captured["params"].get("date") == "2025-06-15T23:00:00Z", (
+        f"date param was: {captured['params'].get('date')}"
+    )
+
+    # Assert OddsRow objects are returned and parsed correctly
+    assert len(rows) == 2, f"Expected 2 OddsRow objects (home + away ml), got {len(rows)}"
+    home_row = next((r for r in rows if r.side == "home"), None)
+    away_row = next((r for r in rows if r.side == "away"), None)
+    assert home_row is not None
+    assert away_row is not None
+    assert home_row.market == "ml"
+    assert home_row.book == "draftkings"
+    assert home_row.game_id == game_id
+    # -130 American → 1 + 100/130 ≈ 1.769 decimal
+    assert home_row.price == pytest.approx(1 + 100 / 130, rel=1e-3)
+    # +110 American → 1 + 110/100 = 2.10 decimal
+    assert away_row.price == pytest.approx(2.10, rel=1e-3)
