@@ -157,7 +157,10 @@ class V1OddsProvider(OddsProvider):
                                 return []
 
                             response_text = await resp.text()
-                            response_data = json.loads(response_text)
+                            raw = json.loads(response_text)
+                            # Historical endpoint wraps events: {"data": [...], ...}
+                            # Live endpoint returns a bare array.
+                            response_data = raw.get("data", raw) if isinstance(raw, dict) else raw
                             logger.info(
                                 f"Fetched historical odds for date {date_param}"
                             )

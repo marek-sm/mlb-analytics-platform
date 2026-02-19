@@ -56,16 +56,25 @@ def _parse_batting_order(player_data: dict, batting_order_array: list[int], play
         Batting order (1–9) or None if invalid/bench
     """
     # Primary: parse battingOrder field
+    # Only accept clean slot values (multiples of 100): "100"–"900".
+    # Substitutes get "101", "901", etc. — floor-dividing those would produce
+    # the same slot as the starter they replaced, causing duplicate-key errors
+    # when all rows in the batch share the same source_ts.
     batting_order_str = player_data.get("battingOrder", "0")
     if batting_order_str and batting_order_str != "0":
         try:
-            batting_order = int(batting_order_str) // 100  # "300" → 3
-            if 1 <= batting_order <= 9:
-                return batting_order
+            raw = int(batting_order_str)
+            if raw % 100 == 0:  # starters only; skip substitutes (901, 801, …)
+                batting_order = raw // 100  # "300" → 3
+                if 1 <= batting_order <= 9:
+                    return batting_order
+            # battingOrder is set but non-multiple-of-100 → substitute; never fall
+            # through to the array index or it would collide with the starter's slot.
+            return None
         except (ValueError, TypeError):
             pass
 
-    # Fallback: use battingOrder array index
+    # Fallback: use battingOrder array index (only reached when battingOrder is absent)
     try:
         array_idx = batting_order_array.index(player_id)
         batting_order = array_idx + 1  # 0-based → 1-based
@@ -88,7 +97,12 @@ class V1LineupProvider(LineupProvider):
     Uses MLB Stats API boxscore endpoint (D-057).
     """
 
-    async def fetch_lineup(self, game_id: str, team_id: int | None = None) -> list[LineupRow]:
+    async def fetch_lineup(
+        self,
+        game_id: str,
+        team_id: int | None = None,
+        force_confirmed: bool = False,
+    ) -> list[LineupRow]:
         """
         Fetch lineup for a team in a game from MLB Stats API boxscore.
 
@@ -99,6 +113,11 @@ class V1LineupProvider(LineupProvider):
         Args:
             game_id: Game identifier (gamePk)
             team_id: Team identifier (optional, fetch both if None)
+            force_confirmed: If True, mark all rows confirmed regardless of game
+                status returned by the API.  Use this for historical backfill where
+                the caller already knows the game is final (the boxscore endpoint
+                does not expose abstractGameCode at the top level, so the API-derived
+                status would always default to "P").
 
         Returns:
             List of LineupRow objects
@@ -190,7 +209,7 @@ class V1LineupProvider(LineupProvider):
                     })
 
                 # Determine confirmation status
-                is_confirmed = _is_confirmed(game_status, len(lineup_rows))
+                is_confirmed = force_confirmed or _is_confirmed(game_status, len(lineup_rows))
 
                 # Log lineup info
                 logger.info(

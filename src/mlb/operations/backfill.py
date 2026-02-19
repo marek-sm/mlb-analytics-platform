@@ -116,7 +116,10 @@ async def run_backfill(start_date: date, end_date: date) -> None:
     for game in final_games:
         for team_id in (game.home_team_id, game.away_team_id):
             try:
-                await lineup_provider.fetch_lineup(game.game_id, team_id)
+                # force_confirmed=True: boxscore endpoint lacks abstractGameCode at
+                # the top level so status always defaults to "P"; we know these are
+                # final games, so mark every lineup as confirmed.
+                await lineup_provider.fetch_lineup(game.game_id, team_id, force_confirmed=True)
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
                     "Lineup ingest failed for game %s, team %s: %s",
@@ -256,7 +259,8 @@ async def run_backfill(start_date: date, end_date: date) -> None:
         logger.info("  player_props model trained: version %s", props_version)
 
     # Verify artifact files were serialized to disk.
-    artifacts_dir = Path("models") / "artifacts"
+    # Use the same absolute path the registry resolves: src/mlb/models/artifacts/
+    artifacts_dir = Path(__file__).parent.parent / "models" / "artifacts"
     artifacts = [f for f in os.listdir(artifacts_dir) if f.endswith(".pkl")]
     if not artifacts:
         raise RuntimeError(

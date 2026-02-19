@@ -123,7 +123,11 @@ async def train(conn: asyncpg.Connection) -> str:
             game_id,
         )
 
-        # Get starters for this game
+        # Get one confirmed lineup player per team (batting_order=1) for
+        # team_id keying and platoon-advantage lookup in the P(start) loop.
+        # Note: this returns the leadoff hitter, not the starting pitcher —
+        # the throws field will be approximate, but l.team_id is reliable
+        # (sourced from the boxscore side, matching game.home/away_team_id).
         starters = await conn.fetch(
             f"""
             SELECT l.player_id, l.team_id, p.throws
@@ -132,6 +136,21 @@ async def train(conn: asyncpg.Connection) -> str:
             WHERE l.game_id = $1
               AND l.is_confirmed = TRUE
               AND l.batting_order = 1
+            """,
+            game_id,
+        )
+
+        # Get the actual starting pitchers from game logs for the outs model.
+        # Lineups only stores batters; pitchers are not in the batting order
+        # under the universal DH rule, so their team_id is not set in the
+        # players table.  Game logs correctly flag them via is_starter=TRUE.
+        pitcher_starters = await conn.fetch(
+            f"""
+            SELECT pgl.player_id
+            FROM {Table.PLAYER_GAME_LOGS} pgl
+            WHERE pgl.game_id = $1
+              AND pgl.is_starter = TRUE
+              AND pgl.ip_outs IS NOT NULL
             """,
             game_id,
         )
@@ -224,11 +243,11 @@ async def train(conn: asyncpg.Connection) -> str:
                 pa_y.append(pa_label)
 
         # Build pitcher outs distribution training data
-        for starter in starters:
-            pitcher_id = starter["player_id"]
-            team_id = starter["team_id"]
+        for pitcher in pitcher_starters:
+            pitcher_id = pitcher["player_id"]
 
-            # Get actual outs recorded
+            # ip_outs is already confirmed non-NULL by the pitcher_starters query;
+            # re-fetch here to reuse the same COALESCE pattern for consistency.
             actual_outs = await conn.fetchval(
                 f"""
                 SELECT COALESCE(ip_outs, 0)
